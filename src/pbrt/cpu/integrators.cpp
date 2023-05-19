@@ -235,10 +235,16 @@ void RayIntegrator::EvaluatePixelSample(Point2i pPixel, int sampleIndex, Sampler
     // Initialize _CameraSample_ for current sample
     Filter filter = camera.GetFilm().GetFilter();
     CameraSample cameraSample = GetCameraSample(sampler, pPixel, filter);
+    CameraSample dxCameraSample = GetCameraSample(sampler, pPixel + Point2i(1, 0), filter);
+    CameraSample dyCameraSample = GetCameraSample(sampler, pPixel + Point2i(0, 1), filter);
 
     // Generate camera ray for current sample
     pstd::optional<CameraRayDifferential> cameraRay =
         camera.GenerateRayDifferential(cameraSample, lambda);
+    pstd::optional<CameraRayDifferential> dxCameraRay =
+        camera.GenerateRayDifferential(dxCameraSample, lambda);
+    pstd::optional<CameraRayDifferential> dyCameraRay =
+        camera.GenerateRayDifferential(dyCameraSample, lambda);
 
     // Trace _cameraRay_ if valid
     SampledSpectrum L(0.);
@@ -250,14 +256,24 @@ void RayIntegrator::EvaluatePixelSample(Point2i pPixel, int sampleIndex, Sampler
         // Scale camera ray differentials based on image sampling rate
         Float rayDiffScale =
             std::max<Float>(.125f, 1 / std::sqrt((Float)sampler.SamplesPerPixel()));
-        if (!Options->disablePixelJitter)
+        if (!Options->disablePixelJitter) {
             cameraRay->ray.ScaleDifferentials(rayDiffScale);
-
+            dxCameraRay->ray.ScaleDifferentials(rayDiffScale);
+            dyCameraRay->ray.ScaleDifferentials(rayDiffScale);
+        }
         ++nCameraRays;
         // Evaluate radiance along camera ray
         bool initializeVisibleSurface = camera.GetFilm().UsesVisibleSurface();
+        GradSampler dSampler(sampler);
+        //sampler.Clear();
         L = cameraRay->weight * Li(cameraRay->ray, lambda, sampler, scratchBuffer,
-                                   initializeVisibleSurface ? &visibleSurface : nullptr);
+                                   initializeVisibleSurface ? &visibleSurface : nullptr, dSampler);
+        //dSampler.StartPixelSample(pPixel + Point2i(1, 0), sampleIndex, 2);
+        //sampler.Clear();
+        L -= dxCameraRay->weight * Li(dxCameraRay->ray, lambda, sampler, scratchBuffer,
+                                   initializeVisibleSurface ? &visibleSurface : nullptr,
+                                   dSampler);
+
 
         // Issue warning if unexpected radiance value is returned
         if (L.HasNaNs()) {
@@ -390,7 +406,8 @@ SimplePathIntegrator::SimplePathIntegrator(int maxDepth, bool sampleLights,
 
 SampledSpectrum SimplePathIntegrator::Li(RayDifferential ray, SampledWavelengths &lambda,
                                          Sampler sampler, ScratchBuffer &scratchBuffer,
-                                         VisibleSurface *) const {
+                                         VisibleSurface *,
+                                         GradSampler dSampler) const {
     // Estimate radiance along ray using simple path tracing
     SampledSpectrum L(0.f), beta(1.f);
     bool specularBounce = true;
@@ -629,7 +646,8 @@ PathIntegrator::PathIntegrator(int maxDepth, Camera camera, Sampler sampler,
 
 SampledSpectrum PathIntegrator::Li(RayDifferential ray, SampledWavelengths &lambda,
                                    Sampler sampler, ScratchBuffer &scratchBuffer,
-                                   VisibleSurface *visibleSurf) const {
+                                   VisibleSurface *visibleSurf,
+                                   GradSampler dSampler) const {
     // Declare local variables for _PathIntegrator::Li()_
     SampledSpectrum L(0.f), beta(1.f);
     int depth = 0;
@@ -835,7 +853,8 @@ SimpleVolPathIntegrator::SimpleVolPathIntegrator(int maxDepth, Camera camera,
 
 SampledSpectrum SimpleVolPathIntegrator::Li(RayDifferential ray,
                                             SampledWavelengths &lambda, Sampler sampler,
-                                            ScratchBuffer &buf, VisibleSurface *) const {
+                                            ScratchBuffer &buf, VisibleSurface *,
+                                            GradSampler dSampler) const {
     // Declare local variables for delta tracking integration
     SampledSpectrum L(0.f);
     Float beta = 1.f;
@@ -954,7 +973,8 @@ STAT_COUNTER("Integrator/Surface interactions", surfaceInteractions);
 // VolPathIntegrator Method Definitions
 SampledSpectrum VolPathIntegrator::Li(RayDifferential ray, SampledWavelengths &lambda,
                                       Sampler sampler, ScratchBuffer &scratchBuffer,
-                                      VisibleSurface *visibleSurf) const {
+                                      VisibleSurface *visibleSurf,
+                                      GradSampler dSampler) const {
     // Declare state variables for volumetric path sampling
     SampledSpectrum L(0.f), beta(1.f), r_u(1.f), r_l(1.f);
     bool specularBounce = false, anyNonSpecularBounces = false;
@@ -1419,7 +1439,8 @@ AOIntegrator::AOIntegrator(bool cosSample, Float maxDist, Camera camera, Sampler
 
 SampledSpectrum AOIntegrator::Li(RayDifferential ray, SampledWavelengths &lambda,
                                  Sampler sampler, ScratchBuffer &scratchBuffer,
-                                 VisibleSurface *visibleSurface) const {
+                                 VisibleSurface *visibleSurface,
+                                 GradSampler dSampler) const {
     SampledSpectrum L(0.f);
 
     // Intersect _ray_ with scene and store intersection in _isect_
@@ -2252,7 +2273,8 @@ void BDPTIntegrator::Render() {
 
 SampledSpectrum BDPTIntegrator::Li(RayDifferential ray, SampledWavelengths &lambda,
                                    Sampler sampler, ScratchBuffer &scratchBuffer,
-                                   VisibleSurface *) const {
+                                   VisibleSurface *,
+                                   GradSampler dSampler) const {
     // Trace the camera and light subpaths
     Vertex *cameraVertices = scratchBuffer.Alloc<Vertex[]>(maxDepth + 2);
     int nCamera = GenerateCameraSubpath(*this, ray, lambda, sampler, scratchBuffer,

@@ -30,6 +30,33 @@
 
 namespace pbrt {
 
+
+    //Try to not call the allocator again and again
+class GradSampler {
+  public:
+    GradSampler(Sampler s) { 
+        sampler = s;
+        dimension = 0;
+        randomVector = {};
+    }
+
+    //randomVector is not storing values or its not reading out values when needed, look into it
+    Float Get1D() { 
+        return sampler.Get1D();
+    }
+    Point2f Get2D() { 
+        return sampler.Get2D();
+    }
+    void Clear() {
+        dimension = 0;
+    }
+
+  private:
+    int dimension;
+    Sampler sampler;
+    std::vector<Float> randomVector = {};
+};
+
 // Integrator Definition
 class Integrator {
   public:
@@ -108,7 +135,8 @@ class RayIntegrator : public ImageTileIntegrator {
 
     virtual SampledSpectrum Li(RayDifferential ray, SampledWavelengths &lambda,
                                Sampler sampler, ScratchBuffer &scratchBuffer,
-                               VisibleSurface *visibleSurface) const = 0;
+                               VisibleSurface *visibleSurface,
+                               GradSampler dSampler) const = 0;
 };
 
 // RandomWalkIntegrator Definition
@@ -127,7 +155,8 @@ class RandomWalkIntegrator : public RayIntegrator {
 
     SampledSpectrum Li(RayDifferential ray, SampledWavelengths &lambda, Sampler sampler,
                        ScratchBuffer &scratchBuffer,
-                       VisibleSurface *visibleSurface) const {
+                       VisibleSurface *visibleSurface,
+                       GradSampler dSampler) const {
         return LiRandomWalk(ray, lambda, sampler, scratchBuffer, 0);
     }
 
@@ -188,7 +217,8 @@ class SimplePathIntegrator : public RayIntegrator {
 
     SampledSpectrum Li(RayDifferential ray, SampledWavelengths &lambda, Sampler sampler,
                        ScratchBuffer &scratchBuffer,
-                       VisibleSurface *visibleSurface) const;
+                       VisibleSurface *visibleSurface,
+                       GradSampler dSampler) const;
 
     static std::unique_ptr<SimplePathIntegrator> Create(
         const ParameterDictionary &parameters, Camera camera, Sampler sampler,
@@ -214,7 +244,8 @@ class PathIntegrator : public RayIntegrator {
 
     SampledSpectrum Li(RayDifferential ray, SampledWavelengths &lambda, Sampler sampler,
                        ScratchBuffer &scratchBuffer,
-                       VisibleSurface *visibleSurface) const;
+                       VisibleSurface *visibleSurface,
+                       GradSampler dSampler) const;
 
     static std::unique_ptr<PathIntegrator> Create(const ParameterDictionary &parameters,
                                                   Camera camera, Sampler sampler,
@@ -244,7 +275,8 @@ class SimpleVolPathIntegrator : public RayIntegrator {
 
     SampledSpectrum Li(RayDifferential ray, SampledWavelengths &lambda, Sampler sampler,
                        ScratchBuffer &scratchBuffer,
-                       VisibleSurface *visibleSurface) const;
+                       VisibleSurface *visibleSurface,
+                       GradSampler dSampler) const;
 
     static std::unique_ptr<SimpleVolPathIntegrator> Create(
         const ParameterDictionary &parameters, Camera camera, Sampler sampler,
@@ -272,7 +304,8 @@ class VolPathIntegrator : public RayIntegrator {
 
     SampledSpectrum Li(RayDifferential ray, SampledWavelengths &lambda, Sampler sampler,
                        ScratchBuffer &scratchBuffer,
-                       VisibleSurface *visibleSurface) const;
+                       VisibleSurface *visibleSurface,
+                       GradSampler dSampler) const;
 
     static std::unique_ptr<VolPathIntegrator> Create(
         const ParameterDictionary &parameters, Camera camera, Sampler sampler,
@@ -301,7 +334,8 @@ class AOIntegrator : public RayIntegrator {
 
     SampledSpectrum Li(RayDifferential ray, SampledWavelengths &lambda, Sampler sampler,
                        ScratchBuffer &scratchBuffer,
-                       VisibleSurface *visibleSurface) const;
+                       VisibleSurface *visibleSurface,
+                       GradSampler dSampler) const;
 
     static std::unique_ptr<AOIntegrator> Create(const ParameterDictionary &parameters,
                                                 Spectrum illuminant, Camera camera,
@@ -357,7 +391,8 @@ class BDPTIntegrator : public RayIntegrator {
 
     SampledSpectrum Li(RayDifferential ray, SampledWavelengths &lambda, Sampler sampler,
                        ScratchBuffer &scratchBuffer,
-                       VisibleSurface *visibleSurface) const;
+                       VisibleSurface *visibleSurface,
+                       GradSampler dSampler) const;
 
     static std::unique_ptr<BDPTIntegrator> Create(const ParameterDictionary &parameters,
                                                   Camera camera, Sampler sampler,

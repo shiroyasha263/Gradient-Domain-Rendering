@@ -59,6 +59,8 @@ class Sampler
 
     PBRT_CPU_GPU inline Point2f GetPixel2D();
 
+    PBRT_CPU_GPU inline void Clear();
+
     Sampler Clone(Allocator alloc = {});
 
     std::string ToString() const;

@@ -92,6 +92,10 @@ class HaltonSampler {
                 RadicalInverse(1, haltonIndex / baseScales[1])};
     }
 
+    PBRT_CPU_GPU
+    void Clear() { dimension = 2;
+    }
+
     Sampler Clone(Allocator alloc);
     std::string ToString() const;
 
@@ -195,6 +199,9 @@ class PaddedSobolSampler {
     Point2f GetPixel2D() { return Get2D(); }
 
     PBRT_CPU_GPU
+    void Clear() { dimension = 0; }
+
+    PBRT_CPU_GPU
     RandomizeStrategy GetRandomizeStrategy() const { return randomize; }
 
     Sampler Clone(Allocator alloc);
@@ -293,6 +300,9 @@ class ZSobolSampler {
 
     PBRT_CPU_GPU
     Point2f GetPixel2D() { return Get2D(); }
+
+    PBRT_CPU_GPU
+    void Clear() { dimension = 0; }
 
     Sampler Clone(Allocator alloc);
     std::string ToString() const;
@@ -426,6 +436,9 @@ class PMJ02BNSampler {
         return {std::min(u.x, OneMinusEpsilon), std::min(u.y, OneMinusEpsilon)};
     }
 
+    PBRT_CPU_GPU
+    void Clear() { dimension = 2; }
+
     Sampler Clone(Allocator alloc);
     std::string ToString() const;
 
@@ -455,6 +468,9 @@ class IndependentSampler {
 
     PBRT_CPU_GPU
     void StartPixelSample(Point2i p, int sampleIndex, int dimension) {
+        pixel = p;
+        sIndex = sampleIndex;
+        dim = dimension;
         rng.SetSequence(Hash(p, seed));
         rng.Advance(sampleIndex * 65536ull + dimension);
     }
@@ -466,11 +482,20 @@ class IndependentSampler {
     PBRT_CPU_GPU
     Point2f GetPixel2D() { return Get2D(); }
 
+    PBRT_CPU_GPU
+    void Clear() {
+        rng.SetSequence(Hash(pixel, seed));
+        rng.Advance(sIndex * 65536ull + dim);
+    }
+
     Sampler Clone(Allocator alloc);
     std::string ToString() const;
 
   private:
     // IndependentSampler Private Members
+    Point2i pixel;
+    int sIndex;
+    int dim;
     int samplesPerPixel, seed;
     RNG rng;
 };
@@ -534,6 +559,9 @@ class SobolSampler {
 
         return u;
     }
+
+    PBRT_CPU_GPU
+    void Clear() { dimension = 2; }
 
     Sampler Clone(Allocator alloc);
     std::string ToString() const;
@@ -618,6 +646,12 @@ class StratifiedSampler {
     PBRT_CPU_GPU
     Point2f GetPixel2D() { return Get2D(); }
 
+    PBRT_CPU_GPU
+    void Clear() {
+        rng.SetSequence(Hash(pixel, seed));
+        rng.Advance(sampleIndex * 65536ull + dimension);
+    }
+
     Sampler Clone(Allocator alloc);
     std::string ToString() const;
 
@@ -659,6 +693,9 @@ class MLTSampler {
 
     PBRT_CPU_GPU
     void StartPixelSample(Point2i p, int sampleIndex, int dim) {
+        pixel = p;
+        sIndex = sampleIndex;
+        dimension = dim;
         rng.SetSequence(Hash(p));
         rng.Advance(sampleIndex * 65536 + dim * 8192);
     }
@@ -671,6 +708,12 @@ class MLTSampler {
 
     PBRT_CPU_GPU
     Point2f GetPixel2D();
+
+    PBRT_CPU_GPU
+    void Clear() {
+        rng.SetSequence(Hash(pixel));
+        rng.Advance(sIndex * 65536ull + dimension);
+    }
 
     Sampler Clone(Allocator alloc);
 
@@ -721,6 +764,8 @@ class MLTSampler {
     void EnsureReady(int index);
 
     // MLTSampler Private Members
+    Point2i pixel;
+    int sIndex, dimension;
     int mutationsPerPixel;
     RNG rng;
     Float sigma, largeStepProbability;
@@ -789,6 +834,11 @@ inline Point2f Sampler::Get2D() {
 
 inline Point2f Sampler::GetPixel2D() {
     auto get = [&](auto ptr) { return ptr->GetPixel2D(); };
+    return Dispatch(get);
+}
+
+inline void Sampler::Clear() {
+    auto get = [&](auto ptr) { return ptr->Clear(); };
     return Dispatch(get);
 }
 
