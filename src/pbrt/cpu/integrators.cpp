@@ -265,11 +265,11 @@ void RayIntegrator::EvaluatePixelSample(Point2i pPixel, int sampleIndex, Sampler
         // Evaluate radiance along camera ray
         bool initializeVisibleSurface = camera.GetFilm().UsesVisibleSurface();
         GradSampler dSampler(sampler);
-        //sampler.Clear();
+        sampler.Clear();
         L = cameraRay->weight * Li(cameraRay->ray, lambda, sampler, scratchBuffer,
                                    initializeVisibleSurface ? &visibleSurface : nullptr, dSampler);
         //dSampler.StartPixelSample(pPixel + Point2i(1, 0), sampleIndex, 2);
-        //sampler.Clear();
+        sampler.Clear();
         L -= dxCameraRay->weight * Li(dxCameraRay->ray, lambda, sampler, scratchBuffer,
                                    initializeVisibleSurface ? &visibleSurface : nullptr,
                                    dSampler);
