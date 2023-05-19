@@ -264,15 +264,13 @@ void RayIntegrator::EvaluatePixelSample(Point2i pPixel, int sampleIndex, Sampler
         ++nCameraRays;
         // Evaluate radiance along camera ray
         bool initializeVisibleSurface = camera.GetFilm().UsesVisibleSurface();
-        GradSampler dSampler(sampler);
         sampler.Clear();
         L = cameraRay->weight * Li(cameraRay->ray, lambda, sampler, scratchBuffer,
-                                   initializeVisibleSurface ? &visibleSurface : nullptr, dSampler);
+                                   initializeVisibleSurface ? &visibleSurface : nullptr);
         //dSampler.StartPixelSample(pPixel + Point2i(1, 0), sampleIndex, 2);
         sampler.Clear();
         L -= dxCameraRay->weight * Li(dxCameraRay->ray, lambda, sampler, scratchBuffer,
-                                   initializeVisibleSurface ? &visibleSurface : nullptr,
-                                   dSampler);
+                                   initializeVisibleSurface ? &visibleSurface : nullptr);
 
 
         // Issue warning if unexpected radiance value is returned
@@ -406,8 +404,7 @@ SimplePathIntegrator::SimplePathIntegrator(int maxDepth, bool sampleLights,
 
 SampledSpectrum SimplePathIntegrator::Li(RayDifferential ray, SampledWavelengths &lambda,
                                          Sampler sampler, ScratchBuffer &scratchBuffer,
-                                         VisibleSurface *,
-                                         GradSampler dSampler) const {
+                                         VisibleSurface *) const {
     // Estimate radiance along ray using simple path tracing
     SampledSpectrum L(0.f), beta(1.f);
     bool specularBounce = true;
@@ -646,8 +643,7 @@ PathIntegrator::PathIntegrator(int maxDepth, Camera camera, Sampler sampler,
 
 SampledSpectrum PathIntegrator::Li(RayDifferential ray, SampledWavelengths &lambda,
                                    Sampler sampler, ScratchBuffer &scratchBuffer,
-                                   VisibleSurface *visibleSurf,
-                                   GradSampler dSampler) const {
+                                   VisibleSurface *visibleSurf) const {
     // Declare local variables for _PathIntegrator::Li()_
     SampledSpectrum L(0.f), beta(1.f);
     int depth = 0;
@@ -853,8 +849,7 @@ SimpleVolPathIntegrator::SimpleVolPathIntegrator(int maxDepth, Camera camera,
 
 SampledSpectrum SimpleVolPathIntegrator::Li(RayDifferential ray,
                                             SampledWavelengths &lambda, Sampler sampler,
-                                            ScratchBuffer &buf, VisibleSurface *,
-                                            GradSampler dSampler) const {
+                                            ScratchBuffer &buf, VisibleSurface *) const {
     // Declare local variables for delta tracking integration
     SampledSpectrum L(0.f);
     Float beta = 1.f;
@@ -973,8 +968,7 @@ STAT_COUNTER("Integrator/Surface interactions", surfaceInteractions);
 // VolPathIntegrator Method Definitions
 SampledSpectrum VolPathIntegrator::Li(RayDifferential ray, SampledWavelengths &lambda,
                                       Sampler sampler, ScratchBuffer &scratchBuffer,
-                                      VisibleSurface *visibleSurf,
-                                      GradSampler dSampler) const {
+                                      VisibleSurface *visibleSurf) const {
     // Declare state variables for volumetric path sampling
     SampledSpectrum L(0.f), beta(1.f), r_u(1.f), r_l(1.f);
     bool specularBounce = false, anyNonSpecularBounces = false;
@@ -1439,8 +1433,7 @@ AOIntegrator::AOIntegrator(bool cosSample, Float maxDist, Camera camera, Sampler
 
 SampledSpectrum AOIntegrator::Li(RayDifferential ray, SampledWavelengths &lambda,
                                  Sampler sampler, ScratchBuffer &scratchBuffer,
-                                 VisibleSurface *visibleSurface,
-                                 GradSampler dSampler) const {
+                                 VisibleSurface *visibleSurface) const {
     SampledSpectrum L(0.f);
 
     // Intersect _ray_ with scene and store intersection in _isect_
@@ -2273,8 +2266,7 @@ void BDPTIntegrator::Render() {
 
 SampledSpectrum BDPTIntegrator::Li(RayDifferential ray, SampledWavelengths &lambda,
                                    Sampler sampler, ScratchBuffer &scratchBuffer,
-                                   VisibleSurface *,
-                                   GradSampler dSampler) const {
+                                   VisibleSurface *) const {
     // Trace the camera and light subpaths
     Vertex *cameraVertices = scratchBuffer.Alloc<Vertex[]>(maxDepth + 2);
     int nCamera = GenerateCameraSubpath(*this, ray, lambda, sampler, scratchBuffer,
