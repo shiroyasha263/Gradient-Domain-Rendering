@@ -203,29 +203,6 @@ class SimplePathIntegrator : public RayIntegrator {
     UniformLightSampler lightSampler;
 };
 
-class SimpleGradIntegrator : public RayIntegrator {
-  public:
-    // SimpleGradIntegrator Public Methods
-    SimpleGradIntegrator(int maxDepth, bool sampleLights, bool sampleBSDF, Camera camera,
-                         Sampler sampler, Primitive aggregate, std::vector<Light> lights);
-
-    SampledSpectrum Li(RayDifferential ray, SampledWavelengths &lambda, Sampler sampler,
-                       ScratchBuffer &scratchBuffer,
-                       VisibleSurface *visibleSurface) const;
-
-    static std::unique_ptr<SimpleGradIntegrator> Create(
-        const ParameterDictionary &parameters, Camera camera, Sampler sampler,
-        Primitive aggregate, std::vector<Light> lights, const FileLoc *loc);
-
-    std::string ToString() const;
-
-  private:
-    // SimpleGradIntegrator Private Members
-    int maxDepth;
-    bool sampleLights, sampleBSDF;
-    UniformLightSampler lightSampler;
-};
-
 // PathIntegrator Definition
 class PathIntegrator : public RayIntegrator {
   public:
