@@ -127,7 +127,7 @@ pstd::optional<CameraRayDifferential> CameraBase::GenerateRayDifferential(
         CameraSample sshift = sample;
         sshift.pFilm.x += eps;
         // Try to generate ray with _sshift_ and compute $x$ differential
-        if (rx = camera.GenerateRay(sshift, lambda); rx) {
+        if (rx = camera.GenerateRay(sshift, lambda)) {
             rd.rxOrigin = rd.o + (rx->ray.o - rd.o) / eps;
             rd.rxDirection = rd.d + (rx->ray.d - rd.d) / eps;
             break;
@@ -139,7 +139,7 @@ pstd::optional<CameraRayDifferential> CameraBase::GenerateRayDifferential(
     for (Float eps : {.05f, -.05f}) {
         CameraSample sshift = sample;
         sshift.pFilm.y += eps;
-        if (ry = camera.GenerateRay(sshift, lambda); ry) {
+        if (ry = camera.GenerateRay(sshift, lambda)) {
             rd.ryOrigin = rd.o + (ry->ray.o - rd.o) / eps;
             rd.ryDirection = rd.d + (ry->ray.d - rd.d) / eps;
             break;
