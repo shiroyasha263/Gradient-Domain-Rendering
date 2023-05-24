@@ -628,51 +628,6 @@ void GradientIntegrator::Render() {
             progress.Update((waveEnd - waveStart) * tileBounds.Area());
         });
 
-        SampledSpectrum v(0.f);
-        SampledWavelengths lambda = camera.GetFilm().SampleWavelengths(0.5f);
-        Filter filter = camera.GetFilm().GetFilter();
-        ParallelFor2D(pixelBounds, [&](Bounds2i tileBounds) {
-            // Render image tile given by _tileBounds_
-            for (Point2i pPixel : tileBounds) {
-                int count = 1;
-                Sampler &sampler = samplers.Get();
-                CameraSample cameraSample = GetCameraSample(sampler, pPixel, filter);
-                v = Primal[pPixel.x][pPixel.y];
-                if (pPixel.x - 1 > 0) {
-                    v += Primal[pPixel.x - 1][pPixel.y] + xGrad[pPixel.x][pPixel.y + 1];
-                    count++;
-                }
-                if (pPixel.y - 1 > 0) {
-                    v += Primal[pPixel.x][pPixel.y - 1] + yGrad[pPixel.x + 1][pPixel.y];
-                    count++;
-                }
-                if (pPixel.x + 1 < camera.GetFilm().FullResolution().x) {
-                    v += Primal[pPixel.x + 1][pPixel.y] - xGrad[pPixel.x + 1][pPixel.y + 1];
-                    count++;
-                }
-                if (pPixel.y + 1 < camera.GetFilm().FullResolution().y) {
-                    v += Primal[pPixel.x][pPixel.y + 1] +
-                         yGrad[pPixel.x + 1][pPixel.y + 1];
-                    count++;
-                }
-                v = v / count;
-                //camera.GetFilm().ResetPixel(pPixel);
-                camera.GetFilm().AddSample(pPixel, v, lambda,
-                   nullptr, cameraSample.filterWeight);
-            }
-        });
-
-        ParallelFor2D(pixelBounds, [&](Bounds2i tileBounds) {
-            // Render image tile given by _tileBounds_
-            for (Point2i pPixel : tileBounds) {
-                Primal[pPixel.x][pPixel.y]          = SampledSpectrum(0.f);
-                xGrad[pPixel.x][pPixel.y + 1]       = SampledSpectrum(0.f);
-                yGrad[pPixel.x + 1][pPixel.y]       = SampledSpectrum(0.f);
-                xGrad[pPixel.x + 1][pPixel.y + 1]   = SampledSpectrum(0.f);
-                yGrad[pPixel.x + 1][pPixel.y + 1]   = SampledSpectrum(0.f);
-            }
-        });
-
         // Update start and end wave
         waveStart = waveEnd;
         waveEnd = std::min(spp, waveEnd + nextWaveSize);
@@ -702,6 +657,45 @@ void GradientIntegrator::Render() {
                 camera.GetFilm().WriteImage(metadata, 1.0f / waveStart);
             }
         }
+    }
+
+    SampledWavelengths lambda = camera.GetFilm().SampleWavelengths(0.5f);
+    Filter filter = camera.GetFilm().GetFilter();
+    int iteration = 0;
+    while (iteration < 10) {
+        ParallelFor2D(pixelBounds, [&](Bounds2i tileBounds) {
+            // Render image tile given by _tileBounds_
+            for (Point2i pPixel : tileBounds) {
+                SampledSpectrum v(0.f);
+                Float count = 1.f;
+                Sampler &sampler = samplers.Get();
+                CameraSample cameraSample = GetCameraSample(sampler, pPixel, filter);
+                v += Primal[pPixel.x][pPixel.y];
+                if (pPixel.x - 1 >= pixelBounds.pMin.x) {
+                    v += Primal[pPixel.x - 1][pPixel.y] + xGrad[pPixel.x][pPixel.y];
+                    count++;
+                }
+                if (pPixel.y - 1 >= pixelBounds.pMin.y) {
+                    v += Primal[pPixel.x][pPixel.y - 1] + yGrad[pPixel.x][pPixel.y];
+                    count++;
+                }
+                if (pPixel.x + 1 <= pixelBounds.pMax.x) {
+                    v += Primal[pPixel.x + 1][pPixel.y] - xGrad[pPixel.x + 1][pPixel.y];
+                    count++;
+                }
+                if (pPixel.y + 1 <= pixelBounds.pMax.y) {
+                    v += Primal[pPixel.x][pPixel.y + 1] - yGrad[pPixel.x][pPixel.y + 1];
+                    count++;
+                }
+                Temp[pPixel.x][pPixel.y] = v / count;
+                camera.GetFilm().ResetPixel(pPixel);
+                camera.GetFilm().AddSample(pPixel, v / count,
+                                           lambda,
+                                           nullptr, cameraSample.filterWeight);
+            }
+        });
+        Primal = Temp;
+        iteration++;
     }
 
     if (mseOutFile)
@@ -816,16 +810,17 @@ void GradientIntegrator::EvaluatePixelSample(Point2i pPixel, int sampleIndex, Sa
 
     //This will keep increasing indefinitely for more number of samples and the technique will fail here
     
-    Primal[pPixel.x][pPixel.y]          += L;
-    xGrad[pPixel.x][pPixel.y + 1]       += 0.5 * (L - Lx1);
-    yGrad[pPixel.x + 1][pPixel.y]       += 0.5 * (L - Ly1);
-    xGrad[pPixel.x + 1][pPixel.y + 1]   += 0.5 * (Lx0 - L);
-    yGrad[pPixel.x + 1][pPixel.y + 1]   += 0.5 * (Ly0 - L);
+    Primal[pPixel.x][pPixel.y]      += L / sampler.SamplesPerPixel();
+    xGrad[pPixel.x][pPixel.y]       += 0.5 * (L - Lx1) / sampler.SamplesPerPixel();
+    yGrad[pPixel.x][pPixel.y]       += 0.5 * (L - Ly1) / sampler.SamplesPerPixel();
+    xGrad[pPixel.x + 1][pPixel.y]   += 0.5 * (Lx0 - L) / sampler.SamplesPerPixel();
+    yGrad[pPixel.x][pPixel.y + 1]   += 0.5 * (Ly0 - L) / sampler.SamplesPerPixel();
     
     // Add camera ray's contribution to image
-    /*camera.GetFilm().AddSample(pPixel, L, lambda,
+    //Check AddSample code for weird stuff like weighing the sample
+    camera.GetFilm().AddSample(pPixel, L, lambda,
                                &visibleSurface,
-                               cameraSample.filterWeight);*/
+                               cameraSample.filterWeight);
 }
 
 SampledSpectrum GradientIntegrator::Li(RayDifferential ray, SampledWavelengths &lambda,

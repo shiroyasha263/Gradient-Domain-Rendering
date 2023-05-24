@@ -488,6 +488,10 @@ class GradientIntegrator : public Integrator {
             camera.GetFilm().FullResolution().x + 1,
             std::vector<SampledSpectrum>(camera.GetFilm().FullResolution().y + 1,
                                          SampledSpectrum(0.f)));
+        Temp = std::vector<std::vector<SampledSpectrum>>(
+            camera.GetFilm().FullResolution().x + 1,
+            std::vector<SampledSpectrum>(camera.GetFilm().FullResolution().y + 1,
+                                         SampledSpectrum(0.f)));
         xGrad = std::vector<std::vector<SampledSpectrum>>(
             camera.GetFilm().FullResolution().x + 1,
             std::vector<SampledSpectrum>(camera.GetFilm().FullResolution().y + 1,
@@ -518,7 +522,7 @@ class GradientIntegrator : public Integrator {
     Sampler samplerPrototype;
     int maxDepth;
     UniformLightSampler lightSampler;
-    std::vector<std::vector<SampledSpectrum>> Primal, xGrad, yGrad;
+    std::vector<std::vector<SampledSpectrum>> Primal, xGrad, yGrad, Temp;
 };
 
 // FunctionIntegrator Definition
