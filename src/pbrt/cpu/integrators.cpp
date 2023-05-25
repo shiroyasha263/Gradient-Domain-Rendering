@@ -617,7 +617,7 @@ void GradientIntegrator::Render() {
                 for (int sampleIndex = waveStart; sampleIndex < waveEnd; ++sampleIndex) {
                     threadSampleIndex = sampleIndex;
                     sampler.StartPixelSample(pPixel, sampleIndex);
-                    EvaluatePixelSample(pPixel, sampleIndex, sampler, scratchBuffer);
+                    GradEvaluatePixelSample(pPixel, sampleIndex, sampler, scratchBuffer);
                     scratchBuffer.Reset();
                 }
 
@@ -662,7 +662,7 @@ void GradientIntegrator::Render() {
     SampledWavelengths lambda = camera.GetFilm().SampleWavelengths(0.5f);
     Filter filter = camera.GetFilm().GetFilter();
     int iteration = 0;
-    while (iteration < 10) {
+    while (iteration < 20) {
         ParallelFor2D(pixelBounds, [&](Bounds2i tileBounds) {
             // Render image tile given by _tileBounds_
             for (Point2i pPixel : tileBounds) {
@@ -715,14 +715,14 @@ void GradientIntegrator::EvaluatePixelSample(Point2i pPixel, int sampleIndex, Sa
     // Initialize _CameraSample_ for current sample
     Filter filter = camera.GetFilm().GetFilter();
     CameraSample cameraSample = GetCameraSample(sampler, pPixel, filter);
-    CameraSample dx0CameraSample =
-        GetCameraSample(sampler, pPixel + Point2i(1, 0), filter);
-    CameraSample dx1CameraSample =
-        GetCameraSample(sampler, pPixel + Point2i(-1, 0), filter);
-    CameraSample dy0CameraSample =
-        GetCameraSample(sampler, pPixel + Point2i(0, 1), filter);
-    CameraSample dy1CameraSample =
-        GetCameraSample(sampler, pPixel + Point2i(0, -1), filter);
+    CameraSample dx0CameraSample = cameraSample;
+    dx0CameraSample.pFilm += Point2i(1, 0);
+    CameraSample dy0CameraSample = cameraSample;
+    dy0CameraSample.pFilm += Point2i(0, 1);
+    CameraSample dx1CameraSample = cameraSample;
+    dx1CameraSample.pFilm += Point2i(-1, 0);
+    CameraSample dy1CameraSample = cameraSample;
+    dy1CameraSample.pFilm += Point2i(0, -1);
 
     // Generate camera ray for current sample
     pstd::optional<CameraRayDifferential> cameraRay =
@@ -742,6 +742,7 @@ void GradientIntegrator::EvaluatePixelSample(Point2i pPixel, int sampleIndex, Sa
     SampledSpectrum Lx1(0.);
     SampledSpectrum Ly0(0.);
     SampledSpectrum Ly1(0.);
+    SampledSpectrum gL(0.);
     VisibleSurface visibleSurface;
     if (cameraRay) {
         // Double check that the ray's direction is normalized.
@@ -758,6 +759,7 @@ void GradientIntegrator::EvaluatePixelSample(Point2i pPixel, int sampleIndex, Sa
             dy1CameraRay->ray.ScaleDifferentials(rayDiffScale);
         }
         ++nCameraRays;
+
         // Evaluate radiance along camera ray
         bool initializeVisibleSurface = camera.GetFilm().UsesVisibleSurface();
         sampler.Clear();
@@ -780,7 +782,6 @@ void GradientIntegrator::EvaluatePixelSample(Point2i pPixel, int sampleIndex, Sa
         Ly1 = dy1CameraRay->weight *
               Li(dy1CameraRay->ray, lambda, sampler, scratchBuffer,
                  initializeVisibleSurface ? &visibleSurface : nullptr);
-
         // Issue warning if unexpected radiance value is returned
         if (L.HasNaNs()) {
             LOG_ERROR("Not-a-number radiance value returned for pixel (%d, "
@@ -820,6 +821,190 @@ void GradientIntegrator::EvaluatePixelSample(Point2i pPixel, int sampleIndex, Sa
     //Check AddSample code for weird stuff like weighing the sample
     camera.GetFilm().AddSample(pPixel, L, lambda,
                                &visibleSurface,
+                               cameraSample.filterWeight);
+}
+
+void GradientIntegrator::GradEvaluatePixelSample(Point2i pPixel, int sampleIndex,
+                                             Sampler sampler,
+                                             ScratchBuffer &scratchBuffer) {
+    // Sample wavelengths for the ray
+    Float lu = sampler.Get1D();
+    if (Options->disableWavelengthJitter)
+        lu = 0.5;
+    SampledWavelengths lambda = camera.GetFilm().SampleWavelengths(lu);
+
+    // Initialize _CameraSample_ for current sample
+    Filter filter = camera.GetFilm().GetFilter();
+    CameraSample cameraSample = GetCameraSample(sampler, pPixel, filter);
+    CameraSample dx0CameraSample = cameraSample;
+    dx0CameraSample.pFilm += Point2i(1, 0);
+    CameraSample dy0CameraSample = cameraSample;
+    dy0CameraSample.pFilm += Point2i(0, 1);
+    CameraSample dx1CameraSample = cameraSample;
+    dx1CameraSample.pFilm += Point2i(-1, 0);
+    CameraSample dy1CameraSample = cameraSample;
+    dy1CameraSample.pFilm += Point2i(0, -1);
+
+    // Generate camera ray for current sample
+    pstd::optional<CameraRayDifferential> cameraRay =
+        camera.GenerateRayDifferential(cameraSample, lambda);
+    pstd::optional<CameraRayDifferential> dx0CameraRay =
+        camera.GenerateRayDifferential(dx0CameraSample, lambda);
+    pstd::optional<CameraRayDifferential> dx1CameraRay =
+        camera.GenerateRayDifferential(dx1CameraSample, lambda);
+    pstd::optional<CameraRayDifferential> dy0CameraRay =
+        camera.GenerateRayDifferential(dy0CameraSample, lambda);
+    pstd::optional<CameraRayDifferential> dy1CameraRay =
+        camera.GenerateRayDifferential(dy1CameraSample, lambda);
+
+    // Trace _cameraRay_ if valid
+    SampledSpectrum L(0.);
+    SampledSpectrum Lx0(0.);
+    SampledSpectrum Lx1(0.);
+    SampledSpectrum Ly0(0.);
+    SampledSpectrum Ly1(0.);
+    SampledSpectrum gL(0.);
+    VisibleSurface visibleSurface;
+
+    // Create the 5 necessary rays
+    PrimalRay pRay(cameraRay->ray);
+    ShiftRay sRay[4] = {ShiftRay(dx0CameraRay->ray), ShiftRay(dy0CameraRay->ray),
+                        ShiftRay(dx1CameraRay->ray), ShiftRay(dy1CameraRay->ray)};
+
+    if (cameraRay) {
+        // Double check that the ray's direction is normalized.
+        DCHECK_GT(Length(cameraRay->ray.d), .999f);
+        DCHECK_LT(Length(cameraRay->ray.d), 1.001f);
+        // Scale camera ray differentials based on image sampling rate
+        Float rayDiffScale =
+            std::max<Float>(.125f, 1 / std::sqrt((Float)sampler.SamplesPerPixel()));
+        if (!Options->disablePixelJitter) {
+            cameraRay->ray.ScaleDifferentials(rayDiffScale);
+            dx0CameraRay->ray.ScaleDifferentials(rayDiffScale);
+            dx1CameraRay->ray.ScaleDifferentials(rayDiffScale);
+            dy0CameraRay->ray.ScaleDifferentials(rayDiffScale);
+            dy1CameraRay->ray.ScaleDifferentials(rayDiffScale);
+        }
+        ++nCameraRays;
+
+        // Evaluate radiance along camera ray
+        bool initializeVisibleSurface = camera.GetFilm().UsesVisibleSurface();
+        sampler.Clear();
+
+        while (pRay.beta) {
+            //--------------------------------------Primal - Implementation---------------------------------------//
+
+            // Find next _SimpleGradIntegrator_ vertex and accumulate contribution
+            // Intersect _ray_ with scene
+            pstd::optional<ShapeIntersection> si = Intersect(pRay.ray);
+
+            // Account for infinite lights if ray has no intersection
+            if (!si) {
+                if (pRay.specularBounce)
+                    for (const auto &light : infiniteLights)
+                        pRay.L += pRay.beta * light.Le(pRay.ray, lambda);
+                break;
+            }
+
+            // Account for emissive surface if light was not sampled
+            SurfaceInteraction &isect = si->intr;
+            if (pRay.specularBounce)
+                pRay.L += pRay.beta * isect.Le(-pRay.ray.d, lambda);
+
+            // End path if maximum depth reached
+            if (pRay.depth++ == maxDepth)
+                break;
+
+            // Get BSDF and skip over medium boundaries
+            // My method will fail if we do forced diffuse because getBSDF has a sampler
+            // call
+            BSDF bsdf = isect.GetBSDF(pRay.ray, lambda, camera, scratchBuffer, sampler);
+            if (!bsdf) {
+                pRay.specularBounce = true;
+                isect.SkipIntersection(&pRay.ray, si->tHit);
+                continue;
+            }
+
+            // Sample direct illumination if _sampleLights_ is true
+            Vector3f wo = -pRay.ray.d;
+            pstd::optional<SampledLight> sampledLight =
+                lightSampler.Sample(sampler.Get1D());
+            // Sample point on _sampledLight_ to estimate direct illumination
+            Point2f uLight = sampler.Get2D();
+            if (sampledLight) {
+                pstd::optional<LightLiSample> ls =
+                    sampledLight->light.SampleLi(isect, uLight, lambda);
+                if (ls && ls->L && ls->pdf > 0) {
+                    // Evaluate BSDF for light and possibly add scattered radiance
+                    Vector3f wi = ls->wi;
+                    SampledSpectrum f = bsdf.f(wo, wi) * AbsDot(wi, isect.shading.n);
+                    if (f && Unoccluded(isect, ls->pLight))
+                        pRay.L += pRay.beta * f * ls->L / (sampledLight->p * ls->pdf);
+                }
+            }
+
+            // Sample outgoing direction at intersection to continue path
+            // Sample BSDF for new path direction
+            Float u = sampler.Get1D();
+            Point2f dir = sampler.Get2D();
+            pstd::optional<BSDFSample> bs = bsdf.Sample_f(wo, u, dir);
+            if (!bs)
+                break;
+            pRay.beta *= bs->f * AbsDot(bs->wi, isect.shading.n) / bs->pdf;
+            pRay.reconPossible = !pRay.specularBounce && !bs->IsSpecular();
+            pRay.specularBounce = bs->IsSpecular();
+            pRay.ray = isect.SpawnRay(bs->wi);
+
+            CHECK_GE(pRay.beta.y(lambda), 0.f);
+            DCHECK(!IsInf(beta.y(lambda)));
+
+            //--------------------------------------Primal - End---------------------------------------//
+
+            //--------------------------------------Shift
+            //Implementation---------------------------------------//
+
+            //--------------------------------------Shift
+            //End---------------------------------------//
+        }
+
+        // Issue warning if unexpected radiance value is returned
+        if (L.HasNaNs()) {
+            LOG_ERROR("Not-a-number radiance value returned for pixel (%d, "
+                      "%d), sample %d. Setting to black.",
+                      pPixel.x, pPixel.y, sampleIndex);
+            L = SampledSpectrum(0.f);
+        } else if (IsInf(L.y(lambda))) {
+            LOG_ERROR("Infinite radiance value returned for pixel (%d, %d), "
+                      "sample %d. Setting to black.",
+                      pPixel.x, pPixel.y, sampleIndex);
+            L = SampledSpectrum(0.f);
+        }
+
+        if (cameraRay)
+            PBRT_DBG(
+                "%s\n",
+                StringPrintf("Camera sample: %s -> ray %s -> L = %s, visibleSurface %s",
+                             cameraSample, cameraRay->ray, L,
+                             (visibleSurface ? visibleSurface.ToString() : "(none)"))
+                    .c_str());
+        else
+            PBRT_DBG("%s\n",
+                     StringPrintf("Camera sample: %s -> no ray generated", cameraSample)
+                         .c_str());
+    }
+
+    // This will keep increasing indefinitely for more number of samples and the technique
+    // will fail here
+    SampledSpectrum s = pRay.L;
+    Primal[pPixel.x][pPixel.y] += s / sampler.SamplesPerPixel();
+    xGrad[pPixel.x][pPixel.y] += 0.5 * (L - Lx1) / sampler.SamplesPerPixel();
+    yGrad[pPixel.x][pPixel.y] += 0.5 * (L - Ly1) / sampler.SamplesPerPixel();
+    xGrad[pPixel.x + 1][pPixel.y] += 0.5 * (Lx0 - L) / sampler.SamplesPerPixel();
+    yGrad[pPixel.x][pPixel.y + 1] += 0.5 * (Ly0 - L) / sampler.SamplesPerPixel();
+
+    // Add camera ray's contribution to image
+    // Check AddSample code for weird stuff like weighing the sample
+    camera.GetFilm().AddSample(pPixel, pRay.L, lambda, &visibleSurface,
                                cameraSample.filterWeight);
 }
 

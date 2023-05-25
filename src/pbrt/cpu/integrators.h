@@ -30,6 +30,40 @@
 
 namespace pbrt {
 
+struct PrimalRay {
+    PrimalRay(RayDifferential r) {
+        specularBounce = true;
+        reconPossible = false;
+        live = true;
+        L = SampledSpectrum(0.f);
+        beta = SampledSpectrum(1.f);
+        ray = r;
+        depth = 0;
+    }
+    bool specularBounce;
+    bool reconPossible;
+    bool live;
+    RayDifferential ray;
+    SampledSpectrum L, beta;
+    int depth;
+};
+
+struct ShiftRay {
+    ShiftRay(RayDifferential r) {
+        specularBounce = true;
+        live = true;
+        L = SampledSpectrum(0.f);
+        beta = SampledSpectrum(1.f);
+        ray = r;
+        depth = 0;
+    }
+    bool specularBounce;
+    bool live;
+    RayDifferential ray;
+    SampledSpectrum L, beta;
+    int depth;
+};
+
 // Integrator Definition
 class Integrator {
   public:
@@ -511,6 +545,9 @@ class GradientIntegrator : public Integrator {
     void Render();
 
     void EvaluatePixelSample(Point2i pPixel, int sampleIndex, Sampler sampler,
+                             ScratchBuffer &scratchBuffer);
+
+    void GradEvaluatePixelSample(Point2i pPixel, int sampleIndex, Sampler sampler,
                              ScratchBuffer &scratchBuffer);
 
     SampledSpectrum Li(RayDifferential ray, SampledWavelengths &lambda, Sampler sampler,
