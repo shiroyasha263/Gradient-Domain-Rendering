@@ -890,81 +890,27 @@ void GradientIntegrator::GradEvaluatePixelSample(Point2i pPixel, int sampleIndex
         // Evaluate radiance along camera ray
         bool initializeVisibleSurface = camera.GetFilm().UsesVisibleSurface();
         sampler.Clear();
+        bool live = true;
+        while (live) {
 
-        while (pRay.beta) {
+            Float randomStorage[6];
+
             //--------------------------------------Primal - Implementation---------------------------------------//
-
-            // Find next _SimpleGradIntegrator_ vertex and accumulate contribution
-            // Intersect _ray_ with scene
-            pstd::optional<ShapeIntersection> si = Intersect(pRay.ray);
-
-            // Account for infinite lights if ray has no intersection
-            if (!si) {
-                if (pRay.specularBounce)
-                    for (const auto &light : infiniteLights)
-                        pRay.L += pRay.beta * light.Le(pRay.ray, lambda);
-                break;
-            }
-
-            // Account for emissive surface if light was not sampled
-            SurfaceInteraction &isect = si->intr;
-            if (pRay.specularBounce)
-                pRay.L += pRay.beta * isect.Le(-pRay.ray.d, lambda);
-
-            // End path if maximum depth reached
-            if (pRay.depth++ == maxDepth)
-                break;
-
-            // Get BSDF and skip over medium boundaries
-            // My method will fail if we do forced diffuse because getBSDF has a sampler
-            // call
-            BSDF bsdf = isect.GetBSDF(pRay.ray, lambda, camera, scratchBuffer, sampler);
-            if (!bsdf) {
-                pRay.specularBounce = true;
-                isect.SkipIntersection(&pRay.ray, si->tHit);
-                continue;
-            }
-
-            // Sample direct illumination if _sampleLights_ is true
-            Vector3f wo = -pRay.ray.d;
-            pstd::optional<SampledLight> sampledLight =
-                lightSampler.Sample(sampler.Get1D());
-            // Sample point on _sampledLight_ to estimate direct illumination
-            Point2f uLight = sampler.Get2D();
-            if (sampledLight) {
-                pstd::optional<LightLiSample> ls =
-                    sampledLight->light.SampleLi(isect, uLight, lambda);
-                if (ls && ls->L && ls->pdf > 0) {
-                    // Evaluate BSDF for light and possibly add scattered radiance
-                    Vector3f wi = ls->wi;
-                    SampledSpectrum f = bsdf.f(wo, wi) * AbsDot(wi, isect.shading.n);
-                    if (f && Unoccluded(isect, ls->pLight))
-                        pRay.L += pRay.beta * f * ls->L / (sampledLight->p * ls->pdf);
-                }
-            }
-
-            // Sample outgoing direction at intersection to continue path
-            // Sample BSDF for new path direction
-            Float u = sampler.Get1D();
-            Point2f dir = sampler.Get2D();
-            pstd::optional<BSDFSample> bs = bsdf.Sample_f(wo, u, dir);
-            if (!bs)
-                break;
-            pRay.beta *= bs->f * AbsDot(bs->wi, isect.shading.n) / bs->pdf;
-            pRay.reconPossible = !pRay.specularBounce && !bs->IsSpecular();
-            pRay.specularBounce = bs->IsSpecular();
-            pRay.ray = isect.SpawnRay(bs->wi);
-
-            CHECK_GE(pRay.beta.y(lambda), 0.f);
-            DCHECK(!IsInf(beta.y(lambda)));
-
+            PrimalRayPropogate(pRay, lambda, sampler, scratchBuffer,
+                   initializeVisibleSurface ? &visibleSurface : nullptr, randomStorage);
+            live = pRay.live;
             //--------------------------------------Primal - End---------------------------------------//
 
-            //--------------------------------------Shift
-            //Implementation---------------------------------------//
-
-            //--------------------------------------Shift
-            //End---------------------------------------//
+            //--------------------------------------Shift - Implementation---------------------------------------//
+            
+            for (int i = 0; i < 4; i++) {
+                ShiftRayPropogate(sRay[i], lambda, sampler, scratchBuffer,
+                                  initializeVisibleSurface ? &visibleSurface : nullptr,
+                                  randomStorage, pRay);
+                live = live || sRay[i].live;
+            }
+            
+            //--------------------------------------Shift - End---------------------------------------//
         }
 
         // Issue warning if unexpected radiance value is returned
@@ -997,14 +943,14 @@ void GradientIntegrator::GradEvaluatePixelSample(Point2i pPixel, int sampleIndex
     // will fail here
     SampledSpectrum s = pRay.L;
     Primal[pPixel.x][pPixel.y] += s / sampler.SamplesPerPixel();
-    xGrad[pPixel.x][pPixel.y] += 0.5 * (L - Lx1) / sampler.SamplesPerPixel();
-    yGrad[pPixel.x][pPixel.y] += 0.5 * (L - Ly1) / sampler.SamplesPerPixel();
-    xGrad[pPixel.x + 1][pPixel.y] += 0.5 * (Lx0 - L) / sampler.SamplesPerPixel();
-    yGrad[pPixel.x][pPixel.y + 1] += 0.5 * (Ly0 - L) / sampler.SamplesPerPixel();
+    xGrad[pPixel.x][pPixel.y] += 0.5 * (s - sRay[2].L) / sampler.SamplesPerPixel();
+    yGrad[pPixel.x][pPixel.y] += 0.5 * (s - sRay[3].L) / sampler.SamplesPerPixel();
+    xGrad[pPixel.x + 1][pPixel.y] += 0.5 * (sRay[0].L - s) / sampler.SamplesPerPixel();
+    yGrad[pPixel.x][pPixel.y + 1] += 0.5 * (sRay[1].L - s) / sampler.SamplesPerPixel();
 
     // Add camera ray's contribution to image
     // Check AddSample code for weird stuff like weighing the sample
-    camera.GetFilm().AddSample(pPixel, pRay.L, lambda, &visibleSurface,
+    camera.GetFilm().AddSample(pPixel, xGrad[pPixel.x + 1][pPixel.y], lambda, &visibleSurface,
                                cameraSample.filterWeight);
 }
 
@@ -1078,6 +1024,207 @@ SampledSpectrum GradientIntegrator::Li(RayDifferential ray, SampledWavelengths &
         DCHECK(!IsInf(beta.y(lambda)));
     }
     return L;
+}
+
+void GradientIntegrator::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths &lambda,
+                                       Sampler sampler, ScratchBuffer &scratchBuffer,
+                                            VisibleSurface *, Float randomStorage[]) const{
+
+    randomStorage[0] = sampler.Get1D();
+    randomStorage[1] = sampler.Get1D();
+    randomStorage[2] = sampler.Get1D();
+    randomStorage[3] = sampler.Get1D();
+    randomStorage[4] = sampler.Get1D();
+    randomStorage[5] = sampler.Get1D();
+
+    pRay.prevL = pRay.L;
+
+    if (!pRay.live)
+        return;
+
+    // Find next _SimpleGradIntegrator_ vertex and accumulate contribution
+    // Intersect _ray_ with scene
+    pstd::optional<ShapeIntersection> si = Intersect(pRay.ray);
+
+    // Account for infinite lights if ray has no intersection
+    if (!si) {
+        if (pRay.specularBounce)
+            for (const auto &light : infiniteLights)
+                pRay.L += pRay.beta * light.Le(pRay.ray, lambda);
+        pRay.live = false;
+        return;
+    }
+
+    // Account for emissive surface if light was not sampled
+    SurfaceInteraction &isect = si->intr;
+    if (pRay.specularBounce)
+        pRay.L += pRay.beta * isect.Le(-pRay.ray.d, lambda);
+
+    // End path if maximum depth reached
+    if (pRay.depth++ == maxDepth) {
+        pRay.live = false;
+        return;
+    }
+
+    // Get BSDF and skip over medium boundaries
+    // My method will fail if we do forced diffuse because getBSDF has a sampler
+    // call
+    BSDF bsdf = isect.GetBSDF(pRay.ray, lambda, camera, scratchBuffer, sampler);
+    if (!bsdf) {
+        pRay.specularBounce = true;
+        isect.SkipIntersection(&pRay.ray, si->tHit);
+        pRay.live = true;
+    }
+
+    // Sample direct illumination if _sampleLights_ is true
+    Vector3f wo = -pRay.ray.d;
+    pstd::optional<SampledLight> sampledLight = lightSampler.Sample(randomStorage[0]);
+    if (sampledLight) {
+        // Sample point on _sampledLight_ to estimate direct illumination
+        Point2f uLight = Point2f(randomStorage[1], randomStorage[2]);
+        pstd::optional<LightLiSample> ls =
+            sampledLight->light.SampleLi(isect, uLight, lambda);
+        if (ls && ls->L && ls->pdf > 0) {
+            // Evaluate BSDF for light and possibly add scattered radiance
+            Vector3f wi = ls->wi;
+            SampledSpectrum f = bsdf.f(wo, wi) * AbsDot(wi, isect.shading.n);
+            if (f && Unoccluded(isect, ls->pLight))
+                pRay.L += pRay.beta * f * ls->L / (sampledLight->p * ls->pdf);
+        }
+    }
+
+    // Sample outgoing direction at intersection to continue path
+    // Sample BSDF for new path direction
+    Point2f dir = Point2f(randomStorage[4], randomStorage[5]);
+    Float u = randomStorage[3];
+    pstd::optional<BSDFSample> bs = bsdf.Sample_f(wo, u, dir);
+    if (!bs) {
+        pRay.live = false;
+        return;
+    }
+
+    //Might have to use shading or geometric normal?? Not really sure
+    pRay.prevCosine = AbsDot(Normalize(wo), isect.shading.n);
+    pRay.prevD = Distance(pRay.ray.o + si->tHit * pRay.ray.d, pRay.ray.o);
+    pRay.prevN = isect.shading.n;
+    
+    pRay.prevMul = bs->f * AbsDot(bs->wi, isect.shading.n) / bs->pdf;
+    pRay.beta *= pRay.prevMul;
+    pRay.reconPossible = !pRay.specularBounce && !bs->IsSpecular();
+    pRay.specularBounce = bs->IsSpecular();
+    pRay.ray = isect.SpawnRay(bs->wi);
+
+    CHECK_GE(pRay.beta.y(lambda), 0.f);
+    DCHECK(!IsInf(beta.y(lambda)));
+    
+    return;
+}
+
+void GradientIntegrator::ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &lambda,
+                                         Sampler sampler, ScratchBuffer &scratchBuffer,
+                                           VisibleSurface *, Float randomStorage[], PrimalRay pRay) const {
+    if (!sRay.live)
+        return;
+
+    if (pRay.reconPossible && !sRay.specularBounce && !IntersectP(Ray(sRay.ray.o, pRay.ray.o - sRay.ray.o), 1 - ShadowEpsilon) && !sRay.reconnected) {
+        sRay.reconnected = true;
+        //sRay.beta = sRay.beta / sRay.prevMul;
+        Vector3f vec = Normalize(pRay.ray.o - sRay.ray.o);
+        Float dis = Distance(sRay.ray.o, pRay.ray.o);
+        Float cosine = AbsDot(-vec, pRay.prevN);
+        Float Jacobian = cosine * pRay.prevD * pRay.prevD / (pRay.prevCosine * dis * dis);
+
+        //
+        // Add bsdf multiplier and the pdf, I am not sure how to implement it for the moment
+        //
+        
+        sRay.beta *= Jacobian;
+        sRay.reconnected = true;
+    }
+
+    if (sRay.reconnected) {
+        sRay.L += sRay.beta * (pRay.L - pRay.prevL);
+        sRay.beta *= pRay.prevMul;
+        if (!pRay.live)
+            sRay.live = false;
+        return;
+    }
+
+    // Find next _SimpleGradIntegrator_ vertex and accumulate contribution
+    // Intersect _ray_ with scene
+    pstd::optional<ShapeIntersection> si = Intersect(sRay.ray);
+
+    // Account for infinite lights if ray has no intersection
+    if (!si) {
+        if (sRay.specularBounce)
+            for (const auto &light : infiniteLights)
+                sRay.L += sRay.beta * light.Le(sRay.ray, lambda);
+        sRay.live = false;
+        return;
+    }
+
+    // Account for emissive surface if light was not sampled
+    SurfaceInteraction &isect = si->intr;
+    if (sRay.specularBounce)
+        sRay.L += sRay.beta * isect.Le(-sRay.ray.d, lambda);
+
+    // End path if maximum depth reached
+    if (sRay.depth++ == maxDepth) {
+        sRay.live = false;
+        return;
+    }
+
+    // Get BSDF and skip over medium boundaries
+    // My method will fail if we do forced diffuse because getBSDF has a sampler
+    // call
+    BSDF bsdf = isect.GetBSDF(sRay.ray, lambda, camera, scratchBuffer, sampler);
+    if (!bsdf) {
+        sRay.specularBounce = true;
+        isect.SkipIntersection(&sRay.ray, si->tHit);
+        sRay.live = true;
+    }
+
+    // Sample direct illumination if _sampleLights_ is true
+    Vector3f wo = -sRay.ray.d;
+    pstd::optional<SampledLight> sampledLight = lightSampler.Sample(randomStorage[0]);
+    if (sampledLight) {
+        // Sample point on _sampledLight_ to estimate direct illumination
+        Point2f uLight = Point2f(randomStorage[1], randomStorage[2]);
+        pstd::optional<LightLiSample> ls =
+            sampledLight->light.SampleLi(isect, uLight, lambda);
+        if (ls && ls->L && ls->pdf > 0) {
+            // Evaluate BSDF for light and possibly add scattered radiance
+            Vector3f wi = ls->wi;
+            SampledSpectrum f = bsdf.f(wo, wi) * AbsDot(wi, isect.shading.n);
+            if (f && Unoccluded(isect, ls->pLight))
+                sRay.L += sRay.beta * f * ls->L / (sampledLight->p * ls->pdf);
+        }
+    }
+
+    // Sample outgoing direction at intersection to continue path
+    // Sample BSDF for new path direction
+    Point2f dir = Point2f(randomStorage[4], randomStorage[5]);
+    Float u = randomStorage[3];
+    pstd::optional<BSDFSample> bs = bsdf.Sample_f(wo, u, dir);
+    if (!bs) {
+        sRay.live = false;
+        return;
+    }
+
+    //Do i need geometric or shaded?
+    sRay.prevN = isect.shading.n;
+    sRay.prevBSDF = bsdf;
+    sRay.prevW = wo;
+
+    sRay.prevMul = bs->f * AbsDot(bs->wi, isect.shading.n) / bs->pdf;
+    sRay.beta *= sRay.prevMul;
+    sRay.specularBounce = bs->IsSpecular();
+    sRay.ray = isect.SpawnRay(bs->wi);
+
+    CHECK_GE(sRay.beta.y(lambda), 0.f);
+    DCHECK(!IsInf(beta.y(lambda)));
+
+    return;
 }
 
 std::string GradientIntegrator::ToString() const {

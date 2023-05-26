@@ -44,7 +44,10 @@ struct PrimalRay {
     bool reconPossible;
     bool live;
     RayDifferential ray;
-    SampledSpectrum L, beta;
+    SampledSpectrum L, beta, prevL, prevMul;
+    Normal3f prevN;
+    Float prevCosine;
+    Float prevD;
     int depth;
 };
 
@@ -52,15 +55,21 @@ struct ShiftRay {
     ShiftRay(RayDifferential r) {
         specularBounce = true;
         live = true;
+        reconnected = false;
         L = SampledSpectrum(0.f);
         beta = SampledSpectrum(1.f);
         ray = r;
         depth = 0;
+        prevMul = SampledSpectrum(1.f);
     }
     bool specularBounce;
     bool live;
+    bool reconnected;
     RayDifferential ray;
-    SampledSpectrum L, beta;
+    SampledSpectrum L, beta, prevMul;
+    Normal3f prevN;
+    BSDF prevBSDF;
+    Vector3f prevW;
     int depth;
 };
 
@@ -553,7 +562,12 @@ class GradientIntegrator : public Integrator {
     SampledSpectrum Li(RayDifferential ray, SampledWavelengths &lambda, Sampler sampler,
                        ScratchBuffer &scratchBuffer,
                        VisibleSurface *visibleSurface) const;
-
+    void PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths &lambda, Sampler sampler,
+                            ScratchBuffer &scratchBuffer, VisibleSurface *,
+                            Float randomStorage[]) const;
+    void ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &lambda, Sampler sampler,
+                            ScratchBuffer &scratchBuffer, VisibleSurface *,
+                           Float randomStorage[], PrimalRay pRay) const;
   private:
     Camera camera;
     Sampler samplerPrototype;
