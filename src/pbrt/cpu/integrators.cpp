@@ -503,8 +503,6 @@ std::unique_ptr<SimplePathIntegrator> SimplePathIntegrator::Create(
 
 //GradientIntegrator Method Definitions
 
-
-
 void GradientIntegrator::Render() {
     // Handle debugStart, if set
     if (!Options->debugStart.empty()) {
@@ -662,7 +660,7 @@ void GradientIntegrator::Render() {
     SampledWavelengths lambda = camera.GetFilm().SampleWavelengths(0.5f);
     Filter filter = camera.GetFilm().GetFilter();
     int iteration = 0;
-    while (iteration < 20) {
+    while (iteration < 10) {
         ParallelFor2D(pixelBounds, [&](Bounds2i tileBounds) {
             // Render image tile given by _tileBounds_
             for (Point2i pPixel : tileBounds) {
@@ -679,24 +677,42 @@ void GradientIntegrator::Render() {
                     v += Primal[pPixel.x][pPixel.y - 1] + yGrad[pPixel.x][pPixel.y];
                     count++;
                 }
-                if (pPixel.x + 1 <= pixelBounds.pMax.x) {
+                if (pPixel.x + 1 < pixelBounds.pMax.x) {
                     v += Primal[pPixel.x + 1][pPixel.y] - xGrad[pPixel.x + 1][pPixel.y];
                     count++;
                 }
-                if (pPixel.y + 1 <= pixelBounds.pMax.y) {
+                if (pPixel.y + 1 < pixelBounds.pMax.y) {
                     v += Primal[pPixel.x][pPixel.y + 1] - yGrad[pPixel.x][pPixel.y + 1];
                     count++;
                 }
                 Temp[pPixel.x][pPixel.y] = v / count;
                 camera.GetFilm().ResetPixel(pPixel);
                 camera.GetFilm().AddSample(pPixel, v / count,
-                                           lambda,
-                                           nullptr, cameraSample.filterWeight);
+                                          lambda,
+                                          nullptr, cameraSample.filterWeight);
             }
         });
         Primal = Temp;
         iteration++;
     }
+
+    // Optionally write current image to disk
+    ImageMetadata metadata;
+    metadata.renderTimeSeconds = progress.ElapsedSeconds();
+    metadata.samplesPerPixel = waveStart;
+    if (referenceImage) {
+        ImageMetadata filmMetadata;
+        Image filmImage =
+            camera.GetFilm().GetImage(&filmMetadata, 1.f / waveStart);
+        ImageChannelValues mse =
+            filmImage.MSE(filmImage.AllChannelsDesc(), *referenceImage);
+        fprintf(mseOutFile, "%d, %.9g\n", waveStart, mse.Average());
+        metadata.MSE = mse.Average();
+        fflush(mseOutFile);
+    }
+    camera.InitMetadata(&metadata);
+    camera.GetFilm().WriteImage(metadata, 1.0f / waveStart);
+            
 
     if (mseOutFile)
         fclose(mseOutFile);
@@ -819,7 +835,7 @@ void GradientIntegrator::EvaluatePixelSample(Point2i pPixel, int sampleIndex, Sa
     
     // Add camera ray's contribution to image
     //Check AddSample code for weird stuff like weighing the sample
-    camera.GetFilm().AddSample(pPixel, L, lambda,
+    camera.GetFilm().AddSample(pPixel, xGrad[pPixel.x + 1][pPixel.y], lambda,
                                &visibleSurface,
                                cameraSample.filterWeight);
 }
@@ -858,13 +874,8 @@ void GradientIntegrator::GradEvaluatePixelSample(Point2i pPixel, int sampleIndex
         camera.GenerateRayDifferential(dy1CameraSample, lambda);
 
     // Trace _cameraRay_ if valid
-    SampledSpectrum L(0.);
-    SampledSpectrum Lx0(0.);
-    SampledSpectrum Lx1(0.);
-    SampledSpectrum Ly0(0.);
-    SampledSpectrum Ly1(0.);
-    SampledSpectrum gL(0.);
     VisibleSurface visibleSurface;
+    SampledSpectrum L(0.f);
 
     // Create the 5 necessary rays
     PrimalRay pRay(cameraRay->ray);
@@ -941,16 +952,16 @@ void GradientIntegrator::GradEvaluatePixelSample(Point2i pPixel, int sampleIndex
 
     // This will keep increasing indefinitely for more number of samples and the technique
     // will fail here
-    SampledSpectrum s = pRay.L;
-    Primal[pPixel.x][pPixel.y] += s / sampler.SamplesPerPixel();
-    xGrad[pPixel.x][pPixel.y] += 0.5 * (s - sRay[2].L) / sampler.SamplesPerPixel();
-    yGrad[pPixel.x][pPixel.y] += 0.5 * (s - sRay[3].L) / sampler.SamplesPerPixel();
-    xGrad[pPixel.x + 1][pPixel.y] += 0.5 * (sRay[0].L - s) / sampler.SamplesPerPixel();
-    yGrad[pPixel.x][pPixel.y + 1] += 0.5 * (sRay[1].L - s) / sampler.SamplesPerPixel();
+    SampledSpectrum s(pRay.L);
+    Primal[pPixel.x][pPixel.y]      += s / sampler.SamplesPerPixel();
+    xGrad[pPixel.x][pPixel.y]       += 0.5 * (s - sRay[2].L) / sampler.SamplesPerPixel();
+    yGrad[pPixel.x][pPixel.y]       += 0.5 * (s - sRay[3].L) / sampler.SamplesPerPixel();
+    xGrad[pPixel.x + 1][pPixel.y]   += 0.5 * (sRay[0].L - s) / sampler.SamplesPerPixel();
+    yGrad[pPixel.x][pPixel.y + 1]   += 0.5 * (sRay[1].L - s) / sampler.SamplesPerPixel();
 
     // Add camera ray's contribution to image
     // Check AddSample code for weird stuff like weighing the sample
-    camera.GetFilm().AddSample(pPixel, xGrad[pPixel.x + 1][pPixel.y], lambda, &visibleSurface,
+    camera.GetFilm().AddSample(pPixel, xGrad[pPixel.x][pPixel.y], lambda, &visibleSurface,
                                cameraSample.filterWeight);
 }
 
@@ -1037,7 +1048,10 @@ void GradientIntegrator::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths 
     randomStorage[4] = sampler.Get1D();
     randomStorage[5] = sampler.Get1D();
 
-    pRay.prevL = pRay.L;
+    pRay.Lin = SampledSpectrum(0.0f);
+
+    if (!pRay.beta)
+        pRay.live = false;
 
     if (!pRay.live)
         return;
@@ -1049,16 +1063,20 @@ void GradientIntegrator::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths 
     // Account for infinite lights if ray has no intersection
     if (!si) {
         if (pRay.specularBounce)
-            for (const auto &light : infiniteLights)
+            for (const auto &light : infiniteLights) {
                 pRay.L += pRay.beta * light.Le(pRay.ray, lambda);
+                pRay.Lin += light.Le(pRay.ray, lambda);
+            }
         pRay.live = false;
         return;
     }
 
     // Account for emissive surface if light was not sampled
     SurfaceInteraction &isect = si->intr;
-    if (pRay.specularBounce)
+    if (pRay.specularBounce) {
         pRay.L += pRay.beta * isect.Le(-pRay.ray.d, lambda);
+        pRay.Lin += isect.Le(-pRay.ray.d, lambda);
+    }
 
     // End path if maximum depth reached
     if (pRay.depth++ == maxDepth) {
@@ -1088,8 +1106,10 @@ void GradientIntegrator::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths 
             // Evaluate BSDF for light and possibly add scattered radiance
             Vector3f wi = ls->wi;
             SampledSpectrum f = bsdf.f(wo, wi) * AbsDot(wi, isect.shading.n);
-            if (f && Unoccluded(isect, ls->pLight))
+            if (f && Unoccluded(isect, ls->pLight)) {
                 pRay.L += pRay.beta * f * ls->L / (sampledLight->p * ls->pdf);
+                pRay.Lin += f * ls->L / (sampledLight->p * ls->pdf);
+            }
         }
     }
 
@@ -1104,9 +1124,11 @@ void GradientIntegrator::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths 
     }
 
     //Might have to use shading or geometric normal?? Not really sure
-    pRay.prevCosine = AbsDot(Normalize(wo), isect.shading.n);
+    pRay.prevCosine = AbsDot(Normalize(wo), isect.n);
     pRay.prevD = Distance(pRay.ray.o + si->tHit * pRay.ray.d, pRay.ray.o);
-    pRay.prevN = isect.shading.n;
+    pRay.prevN = isect.n;
+    pRay.prevPDF = pRay.pdf;
+    pRay.pdf = bs->pdf;
     
     pRay.prevMul = bs->f * AbsDot(bs->wi, isect.shading.n) / bs->pdf;
     pRay.beta *= pRay.prevMul;
@@ -1115,38 +1137,45 @@ void GradientIntegrator::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths 
     pRay.ray = isect.SpawnRay(bs->wi);
 
     CHECK_GE(pRay.beta.y(lambda), 0.f);
-    DCHECK(!IsInf(beta.y(lambda)));
+    //DCHECK(!IsInf(beta.y(lambda)));
     
     return;
 }
 
 void GradientIntegrator::ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &lambda,
                                          Sampler sampler, ScratchBuffer &scratchBuffer,
-                                           VisibleSurface *, Float randomStorage[], PrimalRay pRay) const {
+                                           VisibleSurface *, Float randomStorage[], const PrimalRay &pRay) const {
+    if (!sRay.beta)
+        sRay.live = false;
+
     if (!sRay.live)
         return;
 
     if (pRay.reconPossible && !sRay.specularBounce && !IntersectP(Ray(sRay.ray.o, pRay.ray.o - sRay.ray.o), 1 - ShadowEpsilon) && !sRay.reconnected) {
         sRay.reconnected = true;
-        //sRay.beta = sRay.beta / sRay.prevMul;
+        sRay.beta = sRay.beta / sRay.prevMul;
         Vector3f vec = Normalize(pRay.ray.o - sRay.ray.o);
         Float dis = Distance(sRay.ray.o, pRay.ray.o);
-        Float cosine = AbsDot(-vec, pRay.prevN);
+        Float cosine = AbsDot(-vec, Normalize(pRay.prevN));
         Float Jacobian = cosine * pRay.prevD * pRay.prevD / (pRay.prevCosine * dis * dis);
-
+    
         //
         // Add bsdf multiplier and the pdf, I am not sure how to implement it for the moment
         //
+        sRay.beta *= sRay.prevBSDF.f(sRay.prevW, vec) * AbsDot(vec, sRay.prevN) / pRay.prevPDF;
         
         sRay.beta *= Jacobian;
-        sRay.reconnected = true;
     }
-
+    
     if (sRay.reconnected) {
-        sRay.L += sRay.beta * (pRay.L - pRay.prevL);
-        sRay.beta *= pRay.prevMul;
-        if (!pRay.live)
+        if (!pRay.live) {
+            SampledSpectrum divisor(1.0f);
+            sRay.L += sRay.beta * pRay.Lin;
             sRay.live = false;
+        } else {
+            sRay.L += sRay.beta * pRay.Lin;
+            sRay.beta *= pRay.prevMul;
+        }
         return;
     }
 
@@ -1212,7 +1241,7 @@ void GradientIntegrator::ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &l
     }
 
     //Do i need geometric or shaded?
-    sRay.prevN = isect.shading.n;
+    sRay.prevN = isect.n;
     sRay.prevBSDF = bsdf;
     sRay.prevW = wo;
 
@@ -1222,7 +1251,7 @@ void GradientIntegrator::ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &l
     sRay.ray = isect.SpawnRay(bs->wi);
 
     CHECK_GE(sRay.beta.y(lambda), 0.f);
-    DCHECK(!IsInf(beta.y(lambda)));
+    DCHECK(!IsInf(sRay.beta.y(lambda)));
 
     return;
 }

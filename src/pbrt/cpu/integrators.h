@@ -44,10 +44,10 @@ struct PrimalRay {
     bool reconPossible;
     bool live;
     RayDifferential ray;
-    SampledSpectrum L, beta, prevL, prevMul;
+    SampledSpectrum L, beta, Lin, prevMul;
     Normal3f prevN;
     Float prevCosine;
-    Float prevD;
+    Float prevD, pdf, prevPDF;
     int depth;
 };
 
@@ -528,19 +528,19 @@ class GradientIntegrator : public Integrator {
           camera(camera),
           samplerPrototype(sampler), maxDepth(maxDepth), lightSampler(lights, Allocator()) {
         Primal = std::vector<std::vector<SampledSpectrum>>(
-            camera.GetFilm().FullResolution().x + 1,
-            std::vector<SampledSpectrum>(camera.GetFilm().FullResolution().y + 1,
+            camera.GetFilm().FullResolution().x,
+            std::vector<SampledSpectrum>(camera.GetFilm().FullResolution().y,
                                          SampledSpectrum(0.f)));
         Temp = std::vector<std::vector<SampledSpectrum>>(
-            camera.GetFilm().FullResolution().x + 1,
-            std::vector<SampledSpectrum>(camera.GetFilm().FullResolution().y + 1,
+            camera.GetFilm().FullResolution().x,
+            std::vector<SampledSpectrum>(camera.GetFilm().FullResolution().y,
                                          SampledSpectrum(0.f)));
         xGrad = std::vector<std::vector<SampledSpectrum>>(
             camera.GetFilm().FullResolution().x + 1,
-            std::vector<SampledSpectrum>(camera.GetFilm().FullResolution().y + 1,
+            std::vector<SampledSpectrum>(camera.GetFilm().FullResolution().y,
                                          SampledSpectrum(0.f)));
         yGrad = std::vector<std::vector<SampledSpectrum>>(
-            camera.GetFilm().FullResolution().x + 1,
+            camera.GetFilm().FullResolution().x,
             std::vector<SampledSpectrum>(camera.GetFilm().FullResolution().y + 1,
                                          SampledSpectrum(0.f)));
     }
@@ -567,7 +567,7 @@ class GradientIntegrator : public Integrator {
                             Float randomStorage[]) const;
     void ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &lambda, Sampler sampler,
                             ScratchBuffer &scratchBuffer, VisibleSurface *,
-                           Float randomStorage[], PrimalRay pRay) const;
+                           Float randomStorage[], const PrimalRay& pRay) const;
   private:
     Camera camera;
     Sampler samplerPrototype;
