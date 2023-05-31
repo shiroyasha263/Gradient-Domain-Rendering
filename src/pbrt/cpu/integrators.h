@@ -567,7 +567,7 @@ class GradientIntegrator : public Integrator {
                             Float randomStorage[]) const;
     void ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &lambda, Sampler sampler,
                             ScratchBuffer &scratchBuffer, VisibleSurface *,
-                           Float randomStorage[], const PrimalRay& pRay) const;
+                           Float randomStorage[], const PrimalRay& pRay, Float& w) const;
   private:
     Camera camera;
     Sampler samplerPrototype;

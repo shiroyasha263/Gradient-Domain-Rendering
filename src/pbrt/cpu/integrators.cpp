@@ -881,6 +881,7 @@ void GradientIntegrator::GradEvaluatePixelSample(Point2i pPixel, int sampleIndex
     PrimalRay pRay(cameraRay->ray);
     ShiftRay sRay[4] = {ShiftRay(dx0CameraRay->ray), ShiftRay(dy0CameraRay->ray),
                         ShiftRay(dx1CameraRay->ray), ShiftRay(dy1CameraRay->ray)};
+    Float weights[4] = {0.5f, 0.5f, 0.5f, 0.5f};
 
     if (cameraRay) {
         // Double check that the ray's direction is normalized.
@@ -917,7 +918,7 @@ void GradientIntegrator::GradEvaluatePixelSample(Point2i pPixel, int sampleIndex
             for (int i = 0; i < 4; i++) {
                 ShiftRayPropogate(sRay[i], lambda, sampler, scratchBuffer,
                                   initializeVisibleSurface ? &visibleSurface : nullptr,
-                                  randomStorage, pRay);
+                                  randomStorage, pRay, weights[i]);
                 live = live || sRay[i].live;
             }
             
@@ -954,10 +955,10 @@ void GradientIntegrator::GradEvaluatePixelSample(Point2i pPixel, int sampleIndex
     // will fail here
     SampledSpectrum s(pRay.L);
     Primal[pPixel.x][pPixel.y]      += s / sampler.SamplesPerPixel();
-    xGrad[pPixel.x][pPixel.y]       += 0.5 * (s - sRay[2].L) / sampler.SamplesPerPixel();
-    yGrad[pPixel.x][pPixel.y]       += 0.5 * (s - sRay[3].L) / sampler.SamplesPerPixel();
-    xGrad[pPixel.x + 1][pPixel.y]   += 0.5 * (sRay[0].L - s) / sampler.SamplesPerPixel();
-    yGrad[pPixel.x][pPixel.y + 1]   += 0.5 * (sRay[1].L - s) / sampler.SamplesPerPixel();
+    xGrad[pPixel.x][pPixel.y]       += weights[2] * (s - sRay[2].L) / sampler.SamplesPerPixel();
+    yGrad[pPixel.x][pPixel.y]       += weights[3] * (s - sRay[3].L) / sampler.SamplesPerPixel();
+    xGrad[pPixel.x + 1][pPixel.y]   += weights[0] * (sRay[0].L - s) / sampler.SamplesPerPixel();
+    yGrad[pPixel.x][pPixel.y + 1]   += weights[1] * (sRay[1].L - s) / sampler.SamplesPerPixel();
 
     // Add camera ray's contribution to image
     // Check AddSample code for weird stuff like weighing the sample
@@ -1144,14 +1145,22 @@ void GradientIntegrator::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths 
 
 void GradientIntegrator::ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &lambda,
                                          Sampler sampler, ScratchBuffer &scratchBuffer,
-                                           VisibleSurface *, Float randomStorage[], const PrimalRay &pRay) const {
+                                           VisibleSurface *, Float randomStorage[], const PrimalRay &pRay, Float& w) const {
     if (!sRay.beta)
         sRay.live = false;
 
     if (!sRay.live)
         return;
 
-    if (pRay.reconPossible && !sRay.specularBounce && !IntersectP(Ray(sRay.ray.o, pRay.ray.o - sRay.ray.o), 1 - ShadowEpsilon) && !sRay.reconnected) {
+    if (pRay.reconPossible && !sRay.specularBounce && !sRay.reconnected) {
+        
+        if (IntersectP(Ray(sRay.ray.o, pRay.ray.o - sRay.ray.o), 1 - ShadowEpsilon)) {
+            sRay.live = false;
+            w = 1.0f;
+            sRay.L = SampledSpectrum(0.f);
+            return;
+        }
+        
         sRay.reconnected = true;
         sRay.beta = sRay.beta / sRay.prevMul;
         Vector3f vec = Normalize(pRay.ray.o - sRay.ray.o);
@@ -1165,17 +1174,26 @@ void GradientIntegrator::ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &l
         sRay.beta *= sRay.prevBSDF.f(sRay.prevW, vec) * AbsDot(vec, sRay.prevN) / pRay.prevPDF;
         
         sRay.beta *= Jacobian;
+        Float pdf = sRay.prevBSDF.PDF(sRay.prevW, vec);
+
+        if (!pdf) {
+            sRay.live = false;
+            w = 1.0f;
+            sRay.L = SampledSpectrum(0.f);
+            return;
+        }
+
+        w = pRay.prevPDF / (pRay.prevPDF + pdf * Jacobian);
+        
     }
     
+    //Assuming that it will cancel out in its other component too, if see weird bugs come back to this
     if (sRay.reconnected) {
-        if (!pRay.live) {
-            SampledSpectrum divisor(1.0f);
-            sRay.L += sRay.beta * pRay.Lin;
+        sRay.L += sRay.beta * pRay.Lin;
+        if (!pRay.live)
             sRay.live = false;
-        } else {
-            sRay.L += sRay.beta * pRay.Lin;
+        else
             sRay.beta *= pRay.prevMul;
-        }
         return;
     }
 
