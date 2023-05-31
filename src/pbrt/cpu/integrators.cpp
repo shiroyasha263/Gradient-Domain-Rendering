@@ -660,7 +660,7 @@ void GradientIntegrator::Render() {
     SampledWavelengths lambda = camera.GetFilm().SampleWavelengths(0.5f);
     Filter filter = camera.GetFilm().GetFilter();
     int iteration = 0;
-    while (iteration < 10) {
+    while (iteration < 25) {
         ParallelFor2D(pixelBounds, [&](Bounds2i tileBounds) {
             // Render image tile given by _tileBounds_
             for (Point2i pPixel : tileBounds) {
@@ -962,7 +962,8 @@ void GradientIntegrator::GradEvaluatePixelSample(Point2i pPixel, int sampleIndex
 
     // Add camera ray's contribution to image
     // Check AddSample code for weird stuff like weighing the sample
-    camera.GetFilm().AddSample(pPixel, xGrad[pPixel.x][pPixel.y], lambda, &visibleSurface,
+    camera.GetFilm().ResetPixel(pPixel);
+    camera.GetFilm().AddSample(pPixel, xGrad[pPixel.x + 1][pPixel.y], lambda, &visibleSurface,
                                cameraSample.filterWeight);
 }
 
