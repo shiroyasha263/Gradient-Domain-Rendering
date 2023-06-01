@@ -39,16 +39,20 @@ struct PrimalRay {
         beta = SampledSpectrum(1.f);
         ray = r;
         depth = 0;
+        pathL = {};
+        bs = true;
     }
     bool specularBounce;
     bool reconPossible;
     bool live;
+    bool bs;
     RayDifferential ray;
     SampledSpectrum L, beta, Lin, prevMul;
     Normal3f prevN;
     Float prevCosine;
     Float prevD, pdf, prevPDF;
     int depth;
+    std::vector<SampledSpectrum> pathL;
 };
 
 struct ShiftRay {
@@ -71,6 +75,9 @@ struct ShiftRay {
     BSDF prevBSDF;
     Vector3f prevW;
     int depth;
+    std::vector<SampledSpectrum> pathL;
+    std::vector<Float> weight;
+    Float reconMIS;
 };
 
 // Integrator Definition
