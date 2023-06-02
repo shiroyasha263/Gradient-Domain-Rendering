@@ -41,11 +41,15 @@ struct PrimalRay {
         depth = 0;
         pathL = {};
         bs = true;
+        noHit = false;
+        prevSpecular = true;
     }
     bool specularBounce;
     bool reconPossible;
     bool live;
     bool bs;
+    bool noHit;
+    bool prevSpecular;
     RayDifferential ray;
     SampledSpectrum L, beta, Lin, prevMul;
     Normal3f prevN;

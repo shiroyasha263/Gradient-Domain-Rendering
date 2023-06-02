@@ -1095,6 +1095,7 @@ void GradientIntegrator::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths 
                 pRay.Lin += light.Le(pRay.ray, lambda);
             }
         pRay.live = false;
+        pRay.noHit = true;
         return;
     }
 
@@ -1163,6 +1164,7 @@ void GradientIntegrator::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths 
     pRay.prevMul = bs->f * AbsDot(bs->wi, isect.shading.n) / bs->pdf;
     pRay.beta *= pRay.prevMul;
     pRay.reconPossible = !pRay.specularBounce && !bs->IsSpecular();
+    pRay.prevSpecular = pRay.specularBounce;
     pRay.specularBounce = bs->IsSpecular();
     pRay.ray = isect.SpawnRay(bs->wi);
 
@@ -1178,13 +1180,16 @@ void GradientIntegrator::ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &l
     //pRay beta check, this is very rare but still there add that too
     if (!sRay.beta) {
         sRay.live = false;
-        if (!(sRay.depth == maxDepth))
+        sRay.weight[sRay.depth] = 1.0f;
+    }
+    
+    if (pRay.prevSpecular ^ sRay.specularBounce) {
             sRay.weight[sRay.depth] = 1.0f;
+            sRay.live = false;
     }
 
     if (!sRay.live) {
-        if (!(sRay.depth == maxDepth))
-            sRay.weight[sRay.depth] = 1.0f;
+        sRay.weight[sRay.depth] = 1.0f;
         return;
     }
 
@@ -1248,6 +1253,10 @@ void GradientIntegrator::ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &l
                 sRay.pathL[sRay.depth] += sRay.beta * light.Le(sRay.ray, lambda);
             }
         sRay.live = false;
+        if (!pRay.noHit) {
+            sRay.weight[sRay.depth] = 1.0f;
+            sRay.pathL[sRay.depth] = SampledSpectrum(0.f);
+        }
         return;
     }
 
@@ -1298,7 +1307,11 @@ void GradientIntegrator::ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &l
     Point2f dir = Point2f(randomStorage[4], randomStorage[5]);
     Float u = randomStorage[3];
     pstd::optional<BSDFSample> bs = bsdf.Sample_f(wo, u, dir);
-    if (!bs || !pRay.bs) {
+    if (!bs) {
+        if (pRay.bs) {
+            sRay.weight[sRay.depth - 1] = 1.0f;
+            sRay.pathL[sRay.depth - 1] = SampledSpectrum(0.f);
+        }
         sRay.live = false;
         return;
     }
