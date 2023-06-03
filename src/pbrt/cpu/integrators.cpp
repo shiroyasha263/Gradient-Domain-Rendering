@@ -695,7 +695,7 @@ void GradientIntegrator::Render() {
         Primal = Temp;
         iteration++;
     }
-
+    
     // Optionally write current image to disk
     ImageMetadata metadata;
     metadata.renderTimeSeconds = progress.ElapsedSeconds();
@@ -888,8 +888,6 @@ void GradientIntegrator::GradEvaluatePixelSample(Point2i pPixel, int sampleIndex
         sRay[i].weight = std::vector<Float>(maxDepth, 0.5f);
     }
 
-    Float weights[4] = {0.5f, 0.5f, 0.5f, 0.5f};
-
     if (cameraRay) {
         // Double check that the ray's direction is normalized.
         DCHECK_GT(Length(cameraRay->ray.d), .999f);
@@ -925,7 +923,7 @@ void GradientIntegrator::GradEvaluatePixelSample(Point2i pPixel, int sampleIndex
             for (int i = 0; i < 4; i++) {
                 ShiftRayPropogate(sRay[i], lambda, sampler, scratchBuffer,
                                   initializeVisibleSurface ? &visibleSurface : nullptr,
-                                  randomStorage, pRay, weights[i]);
+                                  randomStorage, pRay);
                 live = live || sRay[i].live;
             }
             
@@ -976,7 +974,9 @@ void GradientIntegrator::GradEvaluatePixelSample(Point2i pPixel, int sampleIndex
                                          (sRay[1].pathL[i] - pRay.pathL[i]) /
                                          sampler.SamplesPerPixel();
     }
-    Primal[pPixel.x][pPixel.y]      += s / sampler.SamplesPerPixel();
+
+    Primal[pPixel.x][pPixel.y]        += s / sampler.SamplesPerPixel();
+  
     //xGrad[pPixel.x][pPixel.y]       += weights[2] * (s - sRay[2].L) / sampler.SamplesPerPixel();
     //yGrad[pPixel.x][pPixel.y]       += weights[3] * (s - sRay[3].L) / sampler.SamplesPerPixel();
     //xGrad[pPixel.x + 1][pPixel.y]   += weights[0] * (sRay[0].L - s) / sampler.SamplesPerPixel();
@@ -985,7 +985,7 @@ void GradientIntegrator::GradEvaluatePixelSample(Point2i pPixel, int sampleIndex
     // Add camera ray's contribution to image
     // Check AddSample code for weird stuff like weighing the sample
     camera.GetFilm().ResetPixel(pPixel);
-    camera.GetFilm().AddSample(pPixel, xGrad[pPixel.x + 1][pPixel.y], lambda, &visibleSurface,
+    camera.GetFilm().AddSample(pPixel, yGrad[pPixel.x][pPixel.y], lambda, &visibleSurface,
                                cameraSample.filterWeight);
 }
 
@@ -1090,18 +1090,17 @@ void GradientIntegrator::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths 
     if (!si) {
         if (pRay.specularBounce)
             for (const auto &light : infiniteLights) {
-                pRay.L += pRay.beta * light.Le(pRay.ray, lambda);
                 pRay.pathL[pRay.depth] += pRay.beta * light.Le(pRay.ray, lambda);
                 pRay.Lin += light.Le(pRay.ray, lambda);
             }
         pRay.live = false;
+        pRay.noHit = true;
         return;
     }
 
     // Account for emissive surface if light was not sampled
     SurfaceInteraction &isect = si->intr;
     if (pRay.specularBounce) {
-        pRay.L += pRay.beta * isect.Le(-pRay.ray.d, lambda);
         pRay.pathL[pRay.depth] += pRay.beta * isect.Le(-pRay.ray.d, lambda);
         pRay.Lin += isect.Le(-pRay.ray.d, lambda);
     }
@@ -1135,8 +1134,8 @@ void GradientIntegrator::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths 
             Vector3f wi = ls->wi;
             SampledSpectrum f = bsdf.f(wo, wi) * AbsDot(wi, isect.shading.n);
             if (f && Unoccluded(isect, ls->pLight)) {
-                pRay.L += pRay.beta * f * ls->L / (sampledLight->p * ls->pdf);
-                pRay.pathL[pRay.depth - 1] += pRay.beta * f * ls->L / (sampledLight->p * ls->pdf);
+                pRay.pathL[pRay.depth - 1] +=
+                    pRay.beta * f * ls->L / (sampledLight->p * ls->pdf);
                 pRay.Lin += f * ls->L / (sampledLight->p * ls->pdf);
             }
         }
@@ -1150,6 +1149,7 @@ void GradientIntegrator::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths 
     if (!bs) {
         pRay.bs = false;
         pRay.live = false;
+        pRay.bs = false;
         return;
     }
 
@@ -1163,6 +1163,7 @@ void GradientIntegrator::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths 
     pRay.prevMul = bs->f * AbsDot(bs->wi, isect.shading.n) / bs->pdf;
     pRay.beta *= pRay.prevMul;
     pRay.reconPossible = !pRay.specularBounce && !bs->IsSpecular();
+    pRay.prevSpecular = pRay.specularBounce;
     pRay.specularBounce = bs->IsSpecular();
     pRay.ray = isect.SpawnRay(bs->wi);
 
@@ -1174,19 +1175,7 @@ void GradientIntegrator::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths 
 
 void GradientIntegrator::ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &lambda,
                                          Sampler sampler, ScratchBuffer &scratchBuffer,
-                                           VisibleSurface *, Float randomStorage[], const PrimalRay &pRay, Float& w) const {
-    //pRay beta check, this is very rare but still there add that too
-    if (!sRay.beta) {
-        sRay.live = false;
-        if (!(sRay.depth == maxDepth))
-            sRay.weight[sRay.depth] = 1.0f;
-    }
-
-    if (!sRay.live) {
-        if (!(sRay.depth == maxDepth))
-            sRay.weight[sRay.depth] = 1.0f;
-        return;
-    }
+                                           VisibleSurface *, Float randomStorage[], const PrimalRay &pRay) const {
 
     if (pRay.reconPossible && !sRay.specularBounce && !sRay.reconnected) {
         
@@ -1194,6 +1183,8 @@ void GradientIntegrator::ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &l
         if (IntersectP(Ray(sRay.ray.o, pRay.ray.o - sRay.ray.o), 1 - ShadowEpsilon)) {
             sRay.live = false;
             sRay.weight[sRay.depth] = 1.0f;
+            sRay.pathL[sRay.depth] = SampledSpectrum(0.f);
+            sRay.depth++;
             return;
         }
         
@@ -1214,19 +1205,19 @@ void GradientIntegrator::ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &l
     
         if (!pdf) {
             sRay.live = false;
-            sRay.weight[sRay.depth] = 1.0f;
+            sRay.pathL[sRay.depth] = SampledSpectrum(0.f);
+            sRay.depth++;
             return;
         }
-    
-        sRay.weight[sRay.depth] = pRay.prevPDF / (pRay.prevPDF + pdf * Jacobian);
+
         sRay.reconMIS = pRay.prevPDF / (pRay.prevPDF + pdf * Jacobian);
+        sRay.weight[sRay.depth] = sRay.reconMIS;
         
     }
     
     //Assuming that it will cancel out in its other component too, if see weird bugs come back to this
     if (sRay.reconnected) {
-        sRay.L += sRay.beta * pRay.Lin;
-        sRay.pathL[sRay.depth] = sRay.beta * pRay.Lin;
+        sRay.pathL[sRay.depth] += sRay.beta * pRay.Lin;
         sRay.weight[sRay.depth] = sRay.reconMIS;
         sRay.depth++;
         if (!pRay.live)
@@ -1236,17 +1227,33 @@ void GradientIntegrator::ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &l
         return;
     }
 
+    if (!sRay.beta)
+        sRay.live = false;
+
+    if (pRay.prevSpecular ^ sRay.specularBounce)
+        sRay.live = false;
+
+    if (!sRay.live) {
+        sRay.weight[sRay.depth] = 1.0f;
+        if (sRay.depth < maxDepth)
+            sRay.depth++;
+        return;
+    }
+
     // Find next _SimpleGradIntegrator_ vertex and accumulate contribution
     // Intersect _ray_ with scene
     pstd::optional<ShapeIntersection> si = Intersect(sRay.ray);
 
     // Account for infinite lights if ray has no intersection
     if (!si) {
-        if (sRay.specularBounce)
-            for (const auto &light : infiniteLights) {
-                sRay.L += sRay.beta * light.Le(sRay.ray, lambda);
-                sRay.pathL[sRay.depth] += sRay.beta * light.Le(sRay.ray, lambda);
-            }
+        if (pRay.noHit)
+            if (sRay.specularBounce)
+                for (const auto &light : infiniteLights) {
+                    sRay.pathL[sRay.depth] += sRay.beta * light.Le(sRay.ray, lambda);
+                }
+        else
+            sRay.weight[sRay.depth] = 1.0f;
+        sRay.depth++;
         sRay.live = false;
         return;
     }
@@ -1254,7 +1261,6 @@ void GradientIntegrator::ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &l
     // Account for emissive surface if light was not sampled
     SurfaceInteraction &isect = si->intr;
     if (sRay.specularBounce) {
-        sRay.L += sRay.beta * isect.Le(-sRay.ray.d, lambda);
         sRay.pathL[sRay.depth] += sRay.beta * isect.Le(-sRay.ray.d, lambda);
     }
 
@@ -1287,7 +1293,6 @@ void GradientIntegrator::ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &l
             Vector3f wi = ls->wi;
             SampledSpectrum f = bsdf.f(wo, wi) * AbsDot(wi, isect.shading.n);
             if (f && Unoccluded(isect, ls->pLight)) {
-                sRay.L += sRay.beta * f * ls->L / (sampledLight->p * ls->pdf);
                 sRay.pathL[sRay.depth - 1] += sRay.beta * f * ls->L / (sampledLight->p * ls->pdf);
             }
         }
@@ -1300,6 +1305,7 @@ void GradientIntegrator::ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &l
     pstd::optional<BSDFSample> bs = bsdf.Sample_f(wo, u, dir);
     if (!bs || !pRay.bs) {
         sRay.live = false;
+        sRay.specularBounce = true;
         return;
     }
 
