@@ -84,6 +84,23 @@ struct ShiftRay {
     Float reconMIS;
 };
 
+struct VPL {
+    VPL(SampledSpectrum I, SurfaceInteraction isect, RayDifferential ray, SampledWavelengths lambda)
+        : I(I), isect(isect), ray(ray), lambda(lambda) {}
+    SampledSpectrum I;
+    RayDifferential ray;
+    SampledWavelengths lambda;
+    SurfaceInteraction isect;
+};
+
+struct VPLTreeNodes {
+    VPLTreeNodes(VPL vpl, VPLTreeNodes *left, VPLTreeNodes *right)
+    :vpl(vpl), left(left), right(right){}
+    VPL vpl;
+    VPLTreeNodes *left;
+    VPLTreeNodes *right;
+};
+
 // Integrator Definition
 class Integrator {
   public:
@@ -585,6 +602,47 @@ class GradientIntegrator : public Integrator {
     int maxDepth;
     UniformLightSampler lightSampler;
     std::vector<std::vector<SampledSpectrum>> Primal, xGrad, yGrad, Temp;
+};
+
+class VPLIntegrator : public Integrator {
+  public:
+    VPLIntegrator(int maxDepth, Camera camera, Sampler sampler, Primitive aggregate,
+                  std::vector<Light> lights,
+                  const std::string &lightSampleStrategy = "bvh",
+                  bool regularize = false);
+
+    static std::unique_ptr<VPLIntegrator> Create(
+        const ParameterDictionary &parameters, Camera camera, Sampler sampler,
+        Primitive aggregate, std::vector<Light> lights, const FileLoc *loc);
+
+    std::string ToString() const;
+
+    void Render();
+
+    void EvaluatePixelSample(Point2i pPixel, int sampleIndex, Sampler sampler,
+                             ScratchBuffer &scratchBuffer);
+
+    void PixelSampleVPLGenerator(int maxVPL, Sampler sampler, ScratchBuffer &scratchBuffer);
+
+    void VPLTreeGenerator(int axis);
+
+    SampledSpectrum Li(RayDifferential ray, SampledWavelengths &lambda, Sampler sampler,
+                       ScratchBuffer &scratchBuffer,
+                       VisibleSurface *visibleSurface) const;
+
+  private:
+    // PathIntegrator Private Methods
+    SampledSpectrum SampleLd(const SurfaceInteraction &intr, const BSDF *bsdf,
+                             SampledWavelengths &lambda, Sampler sampler) const;
+    SampledSpectrum SampleVPLLd(const SurfaceInteraction &intr, const BSDF *bsdf,
+                             SampledWavelengths &lambda, Sampler sampler, ScratchBuffer &scratchBuffer) const;
+    Camera camera;
+    Sampler samplerPrototype;
+    int maxDepth;
+    LightSampler lightSampler;
+    bool regularize;
+    std::vector<VPL> VPLList;
+    std::vector<std::vector<VPLTreeNodes>> VPLTree;
 };
 
 // FunctionIntegrator Definition
