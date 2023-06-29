@@ -429,7 +429,7 @@ SampledSpectrum SimplePathIntegrator::Li(RayDifferential ray, SampledWavelengths
 
         // Sample direct illumination if _sampleLights_ is true
         Vector3f wo = -ray.d;
-        if (sampleLights) {
+        if (sampleLights && depth != 1) {
             pstd::optional<SampledLight> sampledLight =
                 lightSampler.Sample(sampler.Get1D());
             if (sampledLight) {
@@ -1174,7 +1174,7 @@ void GradientIntegrator::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths 
 
 void GradientIntegrator::ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &lambda,
                                          Sampler sampler, ScratchBuffer &scratchBuffer,
-                                           VisibleSurface *, Float randomStorage[], const PrimalRay &pRay, Float& w) const {
+                                           VisibleSurface *, Float randomStorage[], const PrimalRay &pRay) const {
     //pRay beta check, this is very rare but still there add that too
     if (!sRay.beta) {
         sRay.live = false;
@@ -1483,11 +1483,13 @@ void VPLIntegrator::Render() {
     {
         ScratchBuffer &scratchBuffer = scratchBuffers.Get();
         Sampler &sampler = samplers.Get();
-        int maxVPL = 1000;
+        int maxVPL = 10000;
         for (int i = 0; i < maxVPL; i++) {
             PixelSampleVPLGenerator(maxVPL, sampler, scratchBuffer);
         }
     }
+
+    VPLTreeGenerator();
 
     // Render image in waves
     while (waveStart < spp) {
@@ -1681,7 +1683,7 @@ void VPLIntegrator::PixelSampleVPLGenerator(int maxVPL, Sampler sampler,
             break;
         isSpecular = bs->IsSpecular();
         if (!isSpecular) {
-            VPLList.push_back(VPL(beta / maxVPL, isect, ray, lambda));
+            VPLList.push_back(VPL(beta / maxVPL, isect, ray, lambda, isect.p()));
         }
         beta *= bs->f * AbsDot(bs->wi, isect.shading.n) / bs->pdf;
         ray = isect.SpawnRay(ray, bsdf, bs->wi, bs->flags, bs->eta);
@@ -1691,136 +1693,77 @@ void VPLIntegrator::PixelSampleVPLGenerator(int maxVPL, Sampler sampler,
 SampledSpectrum VPLIntegrator::Li(RayDifferential ray, SampledWavelengths &lambda,
                                        Sampler sampler, ScratchBuffer &scratchBuffer,
                                        VisibleSurface *visibleSurf) const {
-    // Declare local variables for _PathIntegrator::Li()_
+    // Estimate radiance along ray using simple path tracing
     SampledSpectrum L(0.f), beta(1.f);
+    bool specularBounce = true;
     int depth = 0;
-
-    Float p_b, etaScale = 1;
-    bool specularBounce = false, anyNonSpecularBounces = false;
-    LightSampleContext prevIntrCtx;
-
-    // Sample path from camera and accumulate radiance estimate
-    while (true) {
-        // Trace ray and find closest path vertex and its BSDF
+    while (beta) {
+        // Find next _SimplePathIntegrator_ vertex and accumulate contribution
+        // Intersect _ray_ with scene
         pstd::optional<ShapeIntersection> si = Intersect(ray);
-        // Add emitted light at intersection point or from the environment
+
+        // Account for infinite lights if ray has no intersection
         if (!si) {
-            // Incorporate emission from infinite lights for escaped ray
-            for (const auto &light : infiniteLights) {
-                SampledSpectrum Le = light.Le(ray, lambda);
-                if (depth == 0 || specularBounce)
-                    L += beta * Le;
-                else {
-                    // Compute MIS weight for infinite light
-                    Float p_l = lightSampler.PMF(prevIntrCtx, light) *
-                                light.PDF_Li(prevIntrCtx, ray.d, true);
-                    Float w_b = PowerHeuristic(1, p_b, 1, p_l);
-
-                    L += beta * w_b * Le;
-                }
-            }
-
+            if (specularBounce)
+                for (const auto &light : infiniteLights)
+                    L += beta * light.Le(ray, lambda);
             break;
         }
-        // Incorporate emission from surface hit by ray
-        SampledSpectrum Le = si->intr.Le(-ray.d, lambda);
-        if (Le) {
-            if (depth == 0 || specularBounce)
-                L += beta * Le;
-            else {
-                // Compute MIS weight for area light
-                Light areaLight(si->intr.areaLight);
-                Float p_l = lightSampler.PMF(prevIntrCtx, areaLight) *
-                            areaLight.PDF_Li(prevIntrCtx, ray.d, true);
-                Float w_l = PowerHeuristic(1, p_b, 1, p_l);
 
-                L += beta * w_l * Le;
-            }
-        }
-
+        // Account for emissive surface if light was not sampled
         SurfaceInteraction &isect = si->intr;
+        if (specularBounce)
+            L += beta * isect.Le(-ray.d, lambda);
+
+        // End path if maximum depth reached
+        if (depth++ == 1)
+            break;
+
         // Get BSDF and skip over medium boundaries
         BSDF bsdf = isect.GetBSDF(ray, lambda, camera, scratchBuffer, sampler);
         if (!bsdf) {
-            specularBounce = true;  // disable MIS if the indirect ray hits a light
+            specularBounce = true;
             isect.SkipIntersection(&ray, si->tHit);
             continue;
         }
 
-        // Initialize _visibleSurf_ at first intersection
-        if (depth == 0 && visibleSurf) {
-            // Estimate BSDF's albedo
-            // Define sample arrays _ucRho_ and _uRho_ for reflectance estimate
-            constexpr int nRhoSamples = 16;
-            const Float ucRho[nRhoSamples] = {
-                0.75741637, 0.37870818, 0.7083487, 0.18935409, 0.9149363, 0.35417435,
-                0.5990858,  0.09467703, 0.8578725, 0.45746812, 0.686759,  0.17708716,
-                0.9674518,  0.2995429,  0.5083201, 0.047338516};
-            const Point2f uRho[nRhoSamples] = {
-                Point2f(0.855985, 0.570367), Point2f(0.381823, 0.851844),
-                Point2f(0.285328, 0.764262), Point2f(0.733380, 0.114073),
-                Point2f(0.542663, 0.344465), Point2f(0.127274, 0.414848),
-                Point2f(0.964700, 0.947162), Point2f(0.594089, 0.643463),
-                Point2f(0.095109, 0.170369), Point2f(0.825444, 0.263359),
-                Point2f(0.429467, 0.454469), Point2f(0.244460, 0.816459),
-                Point2f(0.756135, 0.731258), Point2f(0.516165, 0.152852),
-                Point2f(0.180888, 0.214174), Point2f(0.898579, 0.503897)};
+        // Sample direct illumination if _sampleLights_ is true
+        L += beta * SampleVPLLd(isect, &bsdf, lambda, sampler, scratchBuffer);
+        
+        Vector3f wo = -ray.d; 
+        
+        //pstd::optional<SampledLight> sampledLight =
+        //    lightSampler.Sample(sampler.Get1D());
+        //if (sampledLight) {
+        //    // Sample point on _sampledLight_ to estimate direct illumination
+        //    Point2f uLight = sampler.Get2D();
+        //    pstd::optional<LightLiSample> ls =
+        //        sampledLight->light.SampleLi(isect, uLight, lambda);
+        //    if (ls && ls->L && ls->pdf > 0) {
+        //        // Evaluate BSDF for light and possibly add scattered radiance
+        //        Vector3f wi = ls->wi;
+        //        SampledSpectrum f = bsdf.f(wo, wi) * AbsDot(wi, isect.shading.n);
+        //        if (f && Unoccluded(isect, ls->pLight)) {
+        //            L += beta * SampleVPLLd(isect, &bsdf, lambda, sampler, scratchBuffer);
+        //        }
+        //    }
+        //}
+        
 
-            SampledSpectrum albedo = bsdf.rho(isect.wo, ucRho, uRho);
-
-            *visibleSurf = VisibleSurface(isect, albedo, lambda);
-        }
-
-        // Possibly regularize the BSDF
-        if (regularize && anyNonSpecularBounces) {
-            ++regularizedBSDFs;
-            bsdf.Regularize();
-        }
-
-        ++totalBSDFs;
-
-        // End path if maximum depth reached
-        if (depth++ == maxDepth)
-            break;
-
-        // Sample direct illumination from the light sources
-        if (IsNonSpecular(bsdf.Flags())) {
-            ++totalPaths;
-            SampledSpectrum Ld = SampleVPLLd(isect, &bsdf, lambda, sampler, scratchBuffer);
-            if (!Ld)
-                ++zeroRadiancePaths;
-            L += beta * Ld;
-        }
-
-        // Sample BSDF to get new path direction
-        Vector3f wo = -ray.d;
+        // Sample outgoing direction at intersection to continue path
+        // Sample BSDF for new path direction
         Float u = sampler.Get1D();
         pstd::optional<BSDFSample> bs = bsdf.Sample_f(wo, u, sampler.Get2D());
         if (!bs)
             break;
-        // Update path state variables after surface scattering
         beta *= bs->f * AbsDot(bs->wi, isect.shading.n) / bs->pdf;
-        p_b = bs->pdfIsProportional ? bsdf.PDF(wo, bs->wi) : bs->pdf;
-        DCHECK(!IsInf(beta.y(lambda)));
         specularBounce = bs->IsSpecular();
-        anyNonSpecularBounces |= !bs->IsSpecular();
-        if (bs->IsTransmission())
-            etaScale *= Sqr(bs->eta);
-        prevIntrCtx = si->intr;
+        ray = isect.SpawnRay(bs->wi);
 
-        ray = isect.SpawnRay(ray, bsdf, bs->wi, bs->flags, bs->eta);
 
-        // Possibly terminate the path with Russian roulette
-        SampledSpectrum rrBeta = beta * etaScale;
-        if (rrBeta.MaxComponentValue() < 1 && depth > 1) {
-            Float q = std::max<Float>(0, 1 - rrBeta.MaxComponentValue());
-            if (sampler.Get1D() < q)
-                break;
-            beta /= 1 - q;
-            DCHECK(!IsInf(beta.y(lambda)));
-        }
+        CHECK_GE(beta.y(lambda), 0.f);
+        DCHECK(!IsInf(beta.y(lambda)));
     }
-    pathLength << depth;
     return L;
 }
 
@@ -1870,14 +1813,6 @@ SampledSpectrum VPLIntegrator::SampleLd(const SurfaceInteraction &intr, const BS
 SampledSpectrum VPLIntegrator::SampleVPLLd(const SurfaceInteraction &intr, const BSDF *bsdf,
                                          SampledWavelengths &lambda,
                                          Sampler sampler, ScratchBuffer &scratchBuffer) const {
-    // Initialize _LightSampleContext_ for light sampling
-    LightSampleContext ctx(intr);
-    // Try to nudge the light sampling position to correct side of the surface
-    BxDFFlags flags = bsdf->Flags();
-    if (IsReflective(flags) && !IsTransmissive(flags))
-        ctx.pi = intr.OffsetRayOrigin(intr.wo);
-    else if (IsTransmissive(flags) && !IsReflective(flags))
-        ctx.pi = intr.OffsetRayOrigin(-intr.wo);
 
     // Choose a light source for the direct lighting calculation
     Float u = sampler.Get1D();
@@ -1885,60 +1820,56 @@ SampledSpectrum VPLIntegrator::SampleVPLLd(const SurfaceInteraction &intr, const
     VPL sampleVPL(VPLList[index]);
     BSDF vplBSDF = sampleVPL.isect.GetBSDF(sampleVPL.ray, sampleVPL.lambda, camera,
                                            scratchBuffer, sampler);
-    // Sample a point on the light source for direct lighting
-    //Light light = sampledLight->light;
-    //DCHECK(light && sampledLight->p > 0);
-    //pstd::optional<LightLiSample> ls = light.SampleLi(ctx, uLight, lambda, true);
-    
-    //if (!sampleVPL.I || !sampleVPL.bsdf)
-    //    return {};
     
     if (!sampleVPL.I  || !vplBSDF)
             return {};
 
     // Evaluate BSDF for light sample and check light visibility
-    Vector3f wo = intr.wo, wi = Normalize(sampleVPL.isect.p() - intr.p());
-    Float distance = Length(sampleVPL.isect.p() - intr.p());
+    Vector3f wo = intr.wo, wi = Normalize(sampleVPL.point - intr.p());
+    Float distance = Length(sampleVPL.point - intr.p());
     SampledSpectrum f = bsdf->f(wo, wi) * AbsDot(wi, intr.shading.n);
     SampledSpectrum fL = vplBSDF.f(-sampleVPL.isect.wo, wi) * AbsDot(wi, sampleVPL.isect.shading.n);
     if (!f || !Unoccluded(intr, sampleVPL.isect))
         return {};
     else
-        return sampleVPL.I * f * fL * VPLList.size();
-
-    // Return light's contribution to reflected radiance
-    //Float p_l = sampledLight->p * ls->pdf;
-    //ls->L = SampledSpectrum(0.f);
-    //if (IsDeltaLight(light.Type()))
-    //    return ls->L * f / p_l;
-    //else {
-    //    Float p_b = bsdf->PDF(wo, wi);
-    //    Float w_l = PowerHeuristic(1, p_l, 1, p_b);
-    //    return w_l * ls->L * f / p_l;
-    //}
+        return sampleVPL.I * f * fL * VPLList.size() / (distance * distance);
 }
 
-void VPLIntegrator::VPLTreeGenerator(int axis) {
+void VPLIntegrator::VPLTreeGenerator() {
 
-    std::vector<VPLTreeNodes> leaves = {};
-    for (int i = 0; i < VPLList.size(); i += 2) {
-        Float distance = 10000;
-        int index = i;
-        for (int j = i + 1; j < VPLList.size(); j++) {
-            Float current = Length(VPLList[i].isect.p() - VPLList[j].isect.p());
-            if (current < distance) {
-                distance = current;
-                index = j;
+    //Sorting
+    int i = 0;
+    int check = VPLList.size();
+    int remainder = 0;
+    while (check) {
+        int index = 0;
+        for (int j = 0; j < pow(2, i); j++) {
+            if (remainder > 0) {
+                std::sort(VPLList.begin() + index,
+                          VPLList.begin() + index + check,
+                          [i](const VPL lhs, const VPL rhs) {
+                              return lhs.point[i % 3] > rhs.point[i % 3];
+                          });
+                index = index + check + 1;
+                remainder--;
+            } else {
+                std::sort(VPLList.begin() + index,
+                          VPLList.begin() + index + check - 1,
+                          [i](const VPL lhs, const VPL rhs) {
+                              return lhs.point[i % 3] > rhs.point[i % 3];
+                          });
+                index = index + check;
             }
         }
-        VPL temp = VPLList[index];
-        if (i + 1 < VPLList.size()) {
-            VPLList[index] = VPLList[i + 1];
-            VPLList[i + 1] = temp;
-        }
+        i++;
+        check = VPLList.size() / pow(2, i);
+        remainder = VPLList.size() - pow(2, i) * check;
+    }
+
+    //Tree Generation
+    std::vector<VPLTreeNodes> leaves = {};
+    for (int i = 0; i < VPLList.size(); i++) {
         leaves.push_back(VPLTreeNodes(VPLList[i], NULL, NULL));
-        if (i + 1 < VPLList.size())
-            leaves.push_back(VPLTreeNodes(VPLList[i + 1], NULL, NULL));
     }
     VPLTree.push_back(leaves);
     int k = 0;

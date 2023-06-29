@@ -84,12 +84,13 @@ struct ShiftRay {
 };
 
 struct VPL {
-    VPL(SampledSpectrum I, SurfaceInteraction isect, RayDifferential ray, SampledWavelengths lambda)
-        : I(I), isect(isect), ray(ray), lambda(lambda) {}
+    VPL(SampledSpectrum I, SurfaceInteraction isect, RayDifferential ray, SampledWavelengths lambda, Point3f point)
+        : I(I), isect(isect), ray(ray), lambda(lambda), point(point) {}
     SampledSpectrum I;
     RayDifferential ray;
     SampledWavelengths lambda;
     SurfaceInteraction isect;
+    Point3f point;
 };
 
 struct VPLTreeNodes {
@@ -594,7 +595,7 @@ class GradientIntegrator : public Integrator {
                             Float randomStorage[]) const;
     void ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &lambda, Sampler sampler,
                             ScratchBuffer &scratchBuffer, VisibleSurface *,
-                           Float randomStorage[], const PrimalRay &pRay, Float &w) const;
+                           Float randomStorage[], const PrimalRay &pRay) const;
   private:
     Camera camera;
     Sampler samplerPrototype;
@@ -623,7 +624,7 @@ class VPLIntegrator : public Integrator {
 
     void PixelSampleVPLGenerator(int maxVPL, Sampler sampler, ScratchBuffer &scratchBuffer);
 
-    void VPLTreeGenerator(int axis);
+    void VPLTreeGenerator();
 
     SampledSpectrum Li(RayDifferential ray, SampledWavelengths &lambda, Sampler sampler,
                        ScratchBuffer &scratchBuffer,
