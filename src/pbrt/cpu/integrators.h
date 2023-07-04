@@ -94,11 +94,24 @@ struct VPL {
 };
 
 struct VPLTreeNodes {
-    VPLTreeNodes(VPL vpl, VPLTreeNodes *left, VPLTreeNodes *right)
-    :vpl(vpl), left(left), right(right){}
-    VPL vpl;
+    VPLTreeNodes(VPL *vpl, VPLTreeNodes *left, VPLTreeNodes *right, SampledSpectrum I)
+    :vpl(vpl), left(left), right(right), I(I){
+        prob = 0.f;
+        if (vpl != NULL) {
+            boundMin = vpl->point;
+            boundMax = vpl->point;
+        } else {
+            boundMax = Point3f(0.f, 0.f, 0.f);
+            boundMin = Point3f(0.f, 0.f, 0.f);
+        }
+    }
+    VPL *vpl;
     VPLTreeNodes *left;
     VPLTreeNodes *right;
+    SampledSpectrum I;
+    Point3f boundMin, boundMax;
+    bool sampledLeft = true;
+    float prob = 0.f;
 };
 
 // Integrator Definition
@@ -626,16 +639,28 @@ class VPLIntegrator : public Integrator {
 
     void VPLTreeGenerator();
 
+    void VPLTreeClear();
+
+    VPLTreeNodes SampleTree(VPLTreeNodes *vplNode, const SurfaceInteraction &intr,
+                            const BSDF *bsdf, Sampler sampler,
+                            ScratchBuffer &scratchBuffer, float &prob);
+
+    void SampleTreeCuts(int cutSize, const SurfaceInteraction &intr, const BSDF *bsdf,
+                        Sampler sampler, ScratchBuffer &scratchBuffer);
+
     SampledSpectrum Li(RayDifferential ray, SampledWavelengths &lambda, Sampler sampler,
                        ScratchBuffer &scratchBuffer,
-                       VisibleSurface *visibleSurface) const;
+                       VisibleSurface *visibleSurface);
 
   private:
     // PathIntegrator Private Methods
     SampledSpectrum SampleLd(const SurfaceInteraction &intr, const BSDF *bsdf,
                              SampledWavelengths &lambda, Sampler sampler) const;
     SampledSpectrum SampleVPLLd(const SurfaceInteraction &intr, const BSDF *bsdf,
-                             SampledWavelengths &lambda, Sampler sampler, ScratchBuffer &scratchBuffer) const;
+                             SampledWavelengths &lambda, Sampler sampler, ScratchBuffer &scratchBuffer);
+    Float MinimumDistance(Point3f sample, Point3f BBMin, Point3f BBMax);
+    Float MaximumCosine(Point3f shadingPoint, Normal3f shadingNormal, Point3f BBMin,
+                        Point3f BBMax);
     Camera camera;
     Sampler samplerPrototype;
     int maxDepth;
@@ -643,6 +668,7 @@ class VPLIntegrator : public Integrator {
     bool regularize;
     std::vector<VPL> VPLList;
     std::vector<std::vector<VPLTreeNodes>> VPLTree;
+    std::vector<VPLTreeNodes> samplePoints;
 };
 
 // FunctionIntegrator Definition

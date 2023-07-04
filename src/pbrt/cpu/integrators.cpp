@@ -1375,6 +1375,7 @@ VPLIntegrator::VPLIntegrator(int maxDepth, Camera camera, Sampler sampler,
       regularize(regularize) {
     VPLList = {};
     VPLTree = {};
+    samplePoints = {};
 }
 
 void VPLIntegrator::Render() {
@@ -1483,7 +1484,7 @@ void VPLIntegrator::Render() {
     {
         ScratchBuffer &scratchBuffer = scratchBuffers.Get();
         Sampler &sampler = samplers.Get();
-        int maxVPL = 10000;
+        int maxVPL = 100000;
         for (int i = 0; i < maxVPL; i++) {
             PixelSampleVPLGenerator(maxVPL, sampler, scratchBuffer);
         }
@@ -1692,7 +1693,7 @@ void VPLIntegrator::PixelSampleVPLGenerator(int maxVPL, Sampler sampler,
 
 SampledSpectrum VPLIntegrator::Li(RayDifferential ray, SampledWavelengths &lambda,
                                        Sampler sampler, ScratchBuffer &scratchBuffer,
-                                       VisibleSurface *visibleSurf) const {
+                                       VisibleSurface *visibleSurf) {
     // Estimate radiance along ray using simple path tracing
     SampledSpectrum L(0.f), beta(1.f);
     bool specularBounce = true;
@@ -1728,8 +1729,10 @@ SampledSpectrum VPLIntegrator::Li(RayDifferential ray, SampledWavelengths &lambd
         }
 
         // Sample direct illumination if _sampleLights_ is true
+        //SampleTreeCuts(10, sampler);
         L += beta * SampleVPLLd(isect, &bsdf, lambda, sampler, scratchBuffer);
-        
+        //VPLTreeClear();
+
         Vector3f wo = -ray.d; 
         
         //pstd::optional<SampledLight> sampledLight =
@@ -1812,27 +1815,35 @@ SampledSpectrum VPLIntegrator::SampleLd(const SurfaceInteraction &intr, const BS
 
 SampledSpectrum VPLIntegrator::SampleVPLLd(const SurfaceInteraction &intr, const BSDF *bsdf,
                                          SampledWavelengths &lambda,
-                                         Sampler sampler, ScratchBuffer &scratchBuffer) const {
+                                         Sampler sampler, ScratchBuffer &scratchBuffer) {
 
     // Choose a light source for the direct lighting calculation
-    Float u = sampler.Get1D();
-    int index = static_cast<int>(u * VPLList.size());
-    VPL sampleVPL(VPLList[index]);
-    BSDF vplBSDF = sampleVPL.isect.GetBSDF(sampleVPL.ray, sampleVPL.lambda, camera,
-                                           scratchBuffer, sampler);
+    SampledSpectrum sampledLd(0.f);
+    int index = sampler.Get1D() * VPLList.size();
+    float prob = 1.f;
+    VPLTreeNodes sampleleaf = SampleTree(&VPLTree[VPLTree.size() - 1][0], intr, bsdf, sampler, scratchBuffer, prob);
+    VPL sampleVPL = *sampleleaf.vpl;
+    //for each (VPLTreeNodes* sampleNode in samplePoints) {
+        //VPL sampleVPL = *sampleNode->vpl;
+        //sampleVPL.I = sampleNode->I;
+        BSDF vplBSDF = sampleVPL.isect.GetBSDF(sampleVPL.ray, sampleVPL.lambda, camera,
+                                               scratchBuffer, sampler);
     
-    if (!sampleVPL.I  || !vplBSDF)
+        if (!sampleVPL.I || !vplBSDF)
             return {};
-
-    // Evaluate BSDF for light sample and check light visibility
-    Vector3f wo = intr.wo, wi = Normalize(sampleVPL.point - intr.p());
-    Float distance = Length(sampleVPL.point - intr.p());
-    SampledSpectrum f = bsdf->f(wo, wi) * AbsDot(wi, intr.shading.n);
-    SampledSpectrum fL = vplBSDF.f(-sampleVPL.isect.wo, wi) * AbsDot(wi, sampleVPL.isect.shading.n);
-    if (!f || !Unoccluded(intr, sampleVPL.isect))
-        return {};
-    else
-        return sampleVPL.I * f * fL * VPLList.size() / (distance * distance);
+    
+        // Evaluate BSDF for light sample and check light visibility
+        Vector3f wo = intr.wo, wi = Normalize(sampleVPL.point - intr.p());
+        Float distance = Length(sampleVPL.point - intr.p());
+        SampledSpectrum f = bsdf->f(wo, wi) * AbsDot(wi, intr.shading.n);
+        SampledSpectrum fL =
+            vplBSDF.f(-sampleVPL.isect.wo, wi) * AbsDot(wi, sampleVPL.isect.shading.n);
+        if (!f || !Unoccluded(intr, sampleVPL.isect))
+            return {};
+        else
+            sampledLd += sampleVPL.I * f * fL / (distance * distance * prob);
+    //}
+    return sampledLd;
 }
 
 void VPLIntegrator::VPLTreeGenerator() {
@@ -1846,7 +1857,7 @@ void VPLIntegrator::VPLTreeGenerator() {
         for (int j = 0; j < pow(2, i); j++) {
             if (remainder > 0) {
                 std::sort(VPLList.begin() + index,
-                          VPLList.begin() + index + check,
+                          VPLList.begin() + index + check + 1,
                           [i](const VPL lhs, const VPL rhs) {
                               return lhs.point[i % 3] > rhs.point[i % 3];
                           });
@@ -1854,7 +1865,7 @@ void VPLIntegrator::VPLTreeGenerator() {
                 remainder--;
             } else {
                 std::sort(VPLList.begin() + index,
-                          VPLList.begin() + index + check - 1,
+                          VPLList.begin() + index + check,
                           [i](const VPL lhs, const VPL rhs) {
                               return lhs.point[i % 3] > rhs.point[i % 3];
                           });
@@ -1869,19 +1880,201 @@ void VPLIntegrator::VPLTreeGenerator() {
     //Tree Generation
     std::vector<VPLTreeNodes> leaves = {};
     for (int i = 0; i < VPLList.size(); i++) {
-        leaves.push_back(VPLTreeNodes(VPLList[i], NULL, NULL));
+        leaves.push_back(VPLTreeNodes(&VPLList[i], NULL, NULL, VPLList[i].I));
     }
     VPLTree.push_back(leaves);
     int k = 0;
     while (VPLTree[k].size() > 1) {
         std::vector<VPLTreeNodes> nodes = {};
         for (int i = 0; i < VPLTree[k].size(); i += 2) {
-            nodes.push_back(
-                VPLTreeNodes(VPLTree[k][i].vpl, &VPLTree[k][i],
-                             i + 1 < VPLTree[k].size() ? &VPLTree[k][i + 1] : NULL));
+            SampledSpectrum temp =
+                VPLTree[k][i].I +
+                (i + 1 < VPLTree[k].size() ? VPLTree[k][i + 1].I : SampledSpectrum(0.f));
+            VPLTreeNodes node(NULL, &VPLTree[k][i],
+                         i + 1 < VPLTree[k].size() ? &VPLTree[k][i + 1] : NULL, temp);
+            if (node.right == NULL) {
+                node.boundMin = node.left->boundMin;
+                node.boundMax = node.left->boundMax;
+            } else {
+                node.boundMin.x = std::min(node.left->boundMin.x, node.right->boundMin.x);
+                node.boundMin.y = std::min(node.left->boundMin.y, node.right->boundMin.y);
+                node.boundMin.z = std::min(node.left->boundMin.z, node.right->boundMin.z);
+                node.boundMax.x = std::max(node.left->boundMax.x, node.right->boundMax.x);
+                node.boundMax.y = std::max(node.left->boundMax.y, node.right->boundMax.y);
+                node.boundMax.z = std::max(node.left->boundMax.z, node.right->boundMax.z);
+            }
+            nodes.push_back(node);
         }
         VPLTree.push_back(nodes);
         k = VPLTree.size() - 1;
+    }
+}
+
+void VPLIntegrator::VPLTreeClear() {
+    for (int i = 0; i < VPLTree.size(); i++) {
+        for (int j = 0; j < VPLTree[i].size(); j++) {
+            if (i != 0)
+                VPLTree[i][j].vpl = NULL;
+        }
+    }
+}
+
+Float VPLIntegrator::MinimumDistance(Point3f sample, Point3f BBMin, Point3f BBMax) {
+    Float dmin;
+    Vector3i checkL;
+    Float diag = Distance(BBMin, BBMax);
+    Float alpha = 1.f;
+    checkL = Vector3i(((sample.x - BBMin.x) * (sample.x - BBMax.x) < 0),
+                      ((sample.y - BBMin.y) * (sample.y - BBMax.y) < 0),
+                      ((sample.z - BBMin.z) * (sample.z - BBMax.z) < 0));
+
+    if (checkL.x + checkL.y + checkL.z == 3) {
+        dmin = 1.f;
+    } else if (checkL.x + checkL.y + checkL.z == 2) {
+        dmin = std::min(fabs((!checkL.x) * (sample.x - BBMin.x) +
+                                 (!checkL.y) * (sample.y - BBMin.y) +
+                                 (!checkL.z) * (sample.z - BBMin.z)),
+                            fabs((!checkL.x) * (sample.x - BBMax.x) +
+                                 (!checkL.y) * (sample.y - BBMax.y) +
+                                 (!checkL.z) * (sample.z - BBMax.z)));
+    } else if (checkL.x + checkL.y + checkL.z == 1) {
+        dmin =
+            Distance(Point3f(std::min(fabs((!checkL.x) * (sample.x - BBMin.x)),
+                                      fabs((!checkL.x) * (sample.x - BBMax.x))),
+                             std::min(fabs((!checkL.y) * (sample.y - BBMin.y)),
+                                      fabs((!checkL.y) * (sample.y - BBMax.y))),
+                             std::min(fabs((!checkL.z) * (sample.z - BBMin.z)),
+                                      fabs((!checkL.z) * (sample.z - BBMax.z)))),
+                     Point3f(0.f, 0.f, 0.f));
+    } else {
+        dmin = Distance(Point3f(std::min(fabs((sample.x - BBMin.x)),
+                                             fabs((sample.x - BBMax.x))),
+                                    std::min(fabs((sample.y - BBMin.y)),
+                                             fabs((sample.y - BBMax.y))),
+                                    std::min(fabs((sample.z - BBMin.z)),
+                                             fabs((sample.z - BBMax.z)))),
+                            Point3f(0.f, 0.f, 0.f));
+    }
+
+    dmin = dmin > alpha * diag ? dmin : 1.f;
+    return dmin;
+}
+
+Float VPLIntegrator::MaximumCosine(Point3f shadingPoint, Normal3f shadingNormal, Point3f BBMin,
+    Point3f BBMax) {
+    Point3f centre = (BBMax + BBMin) / 2;
+    Float radius = fabs(Distance(BBMax, BBMin) / 2.f);
+    Float distance = fabs(Distance(shadingPoint, centre));
+    Vector3f direction = Normalize(centre - shadingPoint);
+    Normal3f normal = Normalize(shadingNormal);
+    if (distance > radius) {
+        if (Dot(direction, normal) >= 0) {
+            Float cosTheta = AbsDot(direction, normal);
+            Float cosPhi = sqrtf(1 - (radius * radius) / (distance * distance));
+            if (cosPhi < cosTheta) {
+                return 1.f;
+            } else {
+                return cosTheta * cosPhi +
+                       sqrtf(1 - cosTheta * cosTheta) * radius / distance;
+            }
+        } else {
+            Float cosTheta = Dot(direction, -normal);
+            Float cosPhi = sqrtf(1 - (radius * radius) / (distance * distance));
+            Float temp = cosTheta * cosPhi + sqrtf(1 - cosTheta * cosTheta) * radius / distance;
+            if (temp > 0.f) {
+                return temp;
+            } else {
+                return 0.f;
+            }
+        }
+    } else {
+        return 1.f;
+    }
+}
+
+VPLTreeNodes VPLIntegrator::SampleTree(VPLTreeNodes *vplNode,
+                                       const SurfaceInteraction &intr, const BSDF *bsdf,
+                                       Sampler sampler, ScratchBuffer &scratchBuffer,
+                                       float &prob) {
+    if (vplNode->left == NULL && vplNode->right == NULL) {
+        return *vplNode;
+    } else if (vplNode->left == NULL || vplNode->right == NULL) {
+        if (vplNode->left == NULL)
+            return SampleTree(vplNode->right, intr, bsdf, sampler, scratchBuffer, prob);
+        else
+            return SampleTree(vplNode->left, intr, bsdf, sampler, scratchBuffer, prob);
+    } else {
+        Vector3f wo = intr.wo;
+        Point3f leftMid = (vplNode->left->boundMin + vplNode->left->boundMax) / 2.f;
+        Point3f rightMid = (vplNode->right->boundMin + vplNode->right->boundMax) / 2.f;
+        Vector3f wiLeft = Normalize(leftMid - intr.p());
+        Vector3f wiRight = Normalize(rightMid - intr.p());
+        SampledSpectrum fLeft = bsdf->f(wo, wiLeft) * AbsDot(wiLeft, intr.shading.n);
+        SampledSpectrum fRight = bsdf->f(wo, wiRight) * AbsDot(wiRight, intr.shading.n);
+        
+        Float dminLeft, dminRight;
+        dminLeft =
+            MinimumDistance(intr.p(), vplNode->left->boundMin, vplNode->left->boundMax);
+        dminRight =
+            MinimumDistance(intr.p(), vplNode->right->boundMin, vplNode->right->boundMax);
+
+        Float cosLeft, cosRight;
+        cosLeft = MaximumCosine(intr.p(), intr.n, vplNode->left->boundMin,
+                                vplNode->left->boundMax);
+        cosRight = MaximumCosine(intr.p(), intr.n, vplNode->right->boundMin,
+                                vplNode->right->boundMax);
+
+        float w1 = vplNode->right->I.Average() * cosRight / (dminRight * dminRight);
+        float w2 = vplNode->left->I.Average() * cosLeft / (dminLeft * dminLeft);
+        if (w1 + w2) {
+            float p = w1 / (w1 + w2);
+            if (sampler.Get1D() > p) {
+                vplNode->sampledLeft = true;
+                prob = prob * (1 - p);
+                return SampleTree(vplNode->left, intr, bsdf, sampler, scratchBuffer,
+                                  prob);
+            } else {
+                vplNode->sampledLeft = false;
+                prob = prob * p;
+                return SampleTree(vplNode->right, intr, bsdf, sampler, scratchBuffer,
+                                  prob);
+            }
+        } else {
+            return VPLTreeNodes(&VPLList[0], NULL, NULL, SampledSpectrum(0.f));
+        }
+    }
+}
+
+void VPLIntegrator::SampleTreeCuts(int cutSize, const SurfaceInteraction &intr,
+                                   const BSDF *bsdf, Sampler sampler,
+                                   ScratchBuffer &scratchBuffer) {
+    float prob = 1.f;
+    samplePoints.push_back(SampleTree(&VPLTree[VPLTree.size() - 1][0], intr, bsdf,
+                                      sampler, scratchBuffer, prob));
+    while (samplePoints.size() < cutSize && samplePoints.size() < VPLList.size()) {
+        int size = samplePoints.size();
+        for (int i = size - 1; i >= 0; i--) {
+            if (samplePoints[i].left == NULL && samplePoints[i].right == NULL)
+                continue;
+            else if (samplePoints[i].left == NULL)
+                samplePoints[i] = *samplePoints[i].right;
+            else if (samplePoints[i].right == NULL)
+                samplePoints[i] = *samplePoints[i].left;
+            else {
+                if (!samplePoints[i].sampledLeft) {
+                    samplePoints.push_back(SampleTree(samplePoints[i].left, intr, bsdf,
+                                                      sampler, scratchBuffer, prob));
+                    samplePoints[i] = *samplePoints[i].right;
+                } else {
+                    samplePoints.push_back(SampleTree(samplePoints[i].right, intr, bsdf,
+                                                      sampler, scratchBuffer, prob));
+                    samplePoints[i] = *samplePoints[i].left;
+                }
+            }
+            if (samplePoints.size() >= cutSize ||
+                samplePoints.size() >= VPLList.size())
+                break;
+        }
     }
 }
 
