@@ -1821,17 +1821,17 @@ SampledSpectrum VPLIntegrator::SampleVPLLd(const SurfaceInteraction &intr, const
     SampledSpectrum sampledLd(0.f);
     int index = sampler.Get1D() * VPLList.size();
     float prob = 1.f;
-    VPLTreeNodes sampleleaf = SampleTree(&VPLTree[VPLTree.size() - 1][0], intr, bsdf, sampler, scratchBuffer, prob);
-    VPL sampleVPL = *sampleleaf.vpl;
-    //for each (VPLTreeNodes* sampleNode in samplePoints) {
-        //VPL sampleVPL = *sampleNode->vpl;
-        //sampleVPL.I = sampleNode->I;
+    //VPLTreeNodes sampleleaf = SampleTree(&VPLTree[VPLTree.size() - 1][0], intr, bsdf, sampler, scratchBuffer, prob);
+    std::vector<VPLTreeNodes> samplePoints = {};
+    SampleTreeCuts(1, intr, bsdf, sampler, scratchBuffer, samplePoints);
+    for (int i = 0; i < samplePoints.size(); i++) {
+        VPL sampleVPL = *samplePoints[i].vpl;
         BSDF vplBSDF = sampleVPL.isect.GetBSDF(sampleVPL.ray, sampleVPL.lambda, camera,
                                                scratchBuffer, sampler);
-    
+
         if (!sampleVPL.I || !vplBSDF)
             return {};
-    
+
         // Evaluate BSDF for light sample and check light visibility
         Vector3f wo = intr.wo, wi = Normalize(sampleVPL.point - intr.p());
         Float distance = Length(sampleVPL.point - intr.p());
@@ -1841,8 +1841,9 @@ SampledSpectrum VPLIntegrator::SampleVPLLd(const SurfaceInteraction &intr, const
         if (!f || !Unoccluded(intr, sampleVPL.isect))
             return {};
         else
-            sampledLd += sampleVPL.I * f * fL / (distance * distance * prob);
-    //}
+            sampledLd +=
+                sampleVPL.I * f * fL / (distance * distance * samplePoints[i].prob);
+    }
     return sampledLd;
 }
 
@@ -1997,21 +1998,19 @@ VPLTreeNodes VPLIntegrator::SampleTree(VPLTreeNodes *vplNode,
                                        Sampler sampler, ScratchBuffer &scratchBuffer,
                                        float &prob) {
     if (vplNode->left == NULL && vplNode->right == NULL) {
+        vplNode->prob = 1.f;
         return *vplNode;
     } else if (vplNode->left == NULL || vplNode->right == NULL) {
-        if (vplNode->left == NULL)
-            return SampleTree(vplNode->right, intr, bsdf, sampler, scratchBuffer, prob);
-        else
-            return SampleTree(vplNode->left, intr, bsdf, sampler, scratchBuffer, prob);
+        if (vplNode->left == NULL) {
+            VPLTreeNodes temp = SampleTree(vplNode->right, intr, bsdf, sampler, scratchBuffer, prob);
+            vplNode->prob = vplNode->right->prob;
+            return temp;
+        } else {
+            VPLTreeNodes temp = SampleTree(vplNode->left, intr, bsdf, sampler, scratchBuffer, prob);
+            vplNode->prob = vplNode->left->prob;
+            return temp;
+        }
     } else {
-        Vector3f wo = intr.wo;
-        Point3f leftMid = (vplNode->left->boundMin + vplNode->left->boundMax) / 2.f;
-        Point3f rightMid = (vplNode->right->boundMin + vplNode->right->boundMax) / 2.f;
-        Vector3f wiLeft = Normalize(leftMid - intr.p());
-        Vector3f wiRight = Normalize(rightMid - intr.p());
-        SampledSpectrum fLeft = bsdf->f(wo, wiLeft) * AbsDot(wiLeft, intr.shading.n);
-        SampledSpectrum fRight = bsdf->f(wo, wiRight) * AbsDot(wiRight, intr.shading.n);
-        
         Float dminLeft, dminRight;
         dminLeft =
             MinimumDistance(intr.p(), vplNode->left->boundMin, vplNode->left->boundMax);
@@ -2031,15 +2030,20 @@ VPLTreeNodes VPLIntegrator::SampleTree(VPLTreeNodes *vplNode,
             if (sampler.Get1D() > p) {
                 vplNode->sampledLeft = true;
                 prob = prob * (1 - p);
-                return SampleTree(vplNode->left, intr, bsdf, sampler, scratchBuffer,
-                                  prob);
+                VPLTreeNodes temp =
+                    SampleTree(vplNode->left, intr, bsdf, sampler, scratchBuffer, prob);
+                vplNode->prob = (1 - p) * vplNode->left->prob;
+                return temp;
             } else {
                 vplNode->sampledLeft = false;
                 prob = prob * p;
-                return SampleTree(vplNode->right, intr, bsdf, sampler, scratchBuffer,
-                                  prob);
+                VPLTreeNodes temp =
+                    SampleTree(vplNode->right, intr, bsdf, sampler, scratchBuffer, prob);
+                vplNode->prob = p * vplNode->right->prob;
+                return temp;
             }
         } else {
+            vplNode->prob = 1.f;
             return VPLTreeNodes(&VPLList[0], NULL, NULL, SampledSpectrum(0.f));
         }
     }
@@ -2047,28 +2051,62 @@ VPLTreeNodes VPLIntegrator::SampleTree(VPLTreeNodes *vplNode,
 
 void VPLIntegrator::SampleTreeCuts(int cutSize, const SurfaceInteraction &intr,
                                    const BSDF *bsdf, Sampler sampler,
-                                   ScratchBuffer &scratchBuffer) {
+                                   ScratchBuffer &scratchBuffer, std::vector<VPLTreeNodes> &samplePoints) {
     float prob = 1.f;
-    samplePoints.push_back(SampleTree(&VPLTree[VPLTree.size() - 1][0], intr, bsdf,
-                                      sampler, scratchBuffer, prob));
+    samplePoints = {};
+    VPL *sample = SampleTree(&VPLTree[VPLTree.size() - 1][0], intr, bsdf, sampler,
+                                     scratchBuffer, prob).vpl;
+    VPLTreeNodes first = VPLTree[VPLTree.size() - 1][0];
+    first.vpl = sample;
+    samplePoints.push_back(first);
     while (samplePoints.size() < cutSize && samplePoints.size() < VPLList.size()) {
         int size = samplePoints.size();
         for (int i = size - 1; i >= 0; i--) {
             if (samplePoints[i].left == NULL && samplePoints[i].right == NULL)
                 continue;
-            else if (samplePoints[i].left == NULL)
+            else if (samplePoints[i].left == NULL) {
+                VPL *temp = samplePoints[i].vpl;
+                Float tempProb = samplePoints[i].prob;
                 samplePoints[i] = *samplePoints[i].right;
-            else if (samplePoints[i].right == NULL)
+                samplePoints[i].vpl = temp;
+                samplePoints[i].prob = tempProb;
+            } else if (samplePoints[i].right == NULL) {
+                VPL *temp = samplePoints[i].vpl;
+                Float tempProb = samplePoints[i].prob;
                 samplePoints[i] = *samplePoints[i].left;
-            else {
+                samplePoints[i].vpl = temp;
+                samplePoints[i].prob = tempProb;
+            } else {
                 if (!samplePoints[i].sampledLeft) {
-                    samplePoints.push_back(SampleTree(samplePoints[i].left, intr, bsdf,
-                                                      sampler, scratchBuffer, prob));
+                    Float p1;
+                    Float rightProb = samplePoints[i].prob;
+                    p1 = rightProb / samplePoints[i].right->prob;
+                    prob = 1.f;
+                    VPL *leftSample = SampleTree(samplePoints[i].left, intr, bsdf,
+                                                   sampler, scratchBuffer, prob).vpl;
+                    VPL *rightSample = samplePoints[i].vpl;
+                    VPLTreeNodes temp = *samplePoints[i].left;
+                    temp.vpl = leftSample;
+                    temp.prob = prob * (1 - p1);
+                    samplePoints.push_back(temp);
                     samplePoints[i] = *samplePoints[i].right;
+                    samplePoints[i].vpl = rightSample;
+                    samplePoints[i].prob = rightProb;
                 } else {
-                    samplePoints.push_back(SampleTree(samplePoints[i].right, intr, bsdf,
-                                                      sampler, scratchBuffer, prob));
+                    Float p1;
+                    Float leftProb = samplePoints[i].prob;
+                    p1 = samplePoints[i].prob / samplePoints[i].left->prob;
+                    prob = 1.f;
+                    VPL *rightSample = SampleTree(samplePoints[i].right, intr, bsdf,
+                                                   sampler, scratchBuffer, prob).vpl;
+                    VPL *leftSample = samplePoints[i].vpl;
+                    VPLTreeNodes temp = *samplePoints[i].right;
+                    temp.vpl = rightSample;
+                    temp.prob = prob * (1 - p1);
+                    samplePoints.push_back(temp);
                     samplePoints[i] = *samplePoints[i].left;
+                    samplePoints[i].vpl = leftSample;
+                    samplePoints[i].prob = leftProb;
                 }
             }
             if (samplePoints.size() >= cutSize ||

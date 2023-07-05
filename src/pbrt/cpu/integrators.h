@@ -111,7 +111,7 @@ struct VPLTreeNodes {
     SampledSpectrum I;
     Point3f boundMin, boundMax;
     bool sampledLeft = true;
-    float prob = 0.f;
+    float prob = 1.f;
 };
 
 // Integrator Definition
@@ -646,7 +646,7 @@ class VPLIntegrator : public Integrator {
                             ScratchBuffer &scratchBuffer, float &prob);
 
     void SampleTreeCuts(int cutSize, const SurfaceInteraction &intr, const BSDF *bsdf,
-                        Sampler sampler, ScratchBuffer &scratchBuffer);
+                        Sampler sampler, ScratchBuffer &scratchBuffer, std::vector<VPLTreeNodes> &samplePoints);
 
     SampledSpectrum Li(RayDifferential ray, SampledWavelengths &lambda, Sampler sampler,
                        ScratchBuffer &scratchBuffer,
