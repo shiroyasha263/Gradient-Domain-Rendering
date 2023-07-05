@@ -2011,6 +2011,7 @@ VPLTreeNodes VPLIntegrator::SampleTree(VPLTreeNodes *vplNode,
             return temp;
         }
     } else {
+
         Float dminLeft, dminRight;
         dminLeft =
             MinimumDistance(intr.p(), vplNode->left->boundMin, vplNode->left->boundMax);
@@ -2058,6 +2059,7 @@ void VPLIntegrator::SampleTreeCuts(int cutSize, const SurfaceInteraction &intr,
                                      scratchBuffer, prob).vpl;
     VPLTreeNodes first = VPLTree[VPLTree.size() - 1][0];
     first.vpl = sample;
+    first.prob = prob;
     samplePoints.push_back(first);
     while (samplePoints.size() < cutSize && samplePoints.size() < VPLList.size()) {
         int size = samplePoints.size();
