@@ -111,6 +111,7 @@ struct VPLTreeNodes {
     SampledSpectrum I;
     Point3f boundMin, boundMax;
     bool sampledLeft = true;
+    unsigned int count = 0;
     float prob = 1.f;
 };
 
