@@ -1087,11 +1087,11 @@ void GradientIntegrator::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths 
 
     // Account for infinite lights if ray has no intersection
     if (!si) {
-        if (pRay.specularBounce)
-            for (const auto &light : infiniteLights) {
-                pRay.pathL[pRay.depth] += pRay.beta * light.Le(pRay.ray, lambda);
-                pRay.Lin += light.Le(pRay.ray, lambda);
-            }
+        //if (pRay.specularBounce)
+        //    for (const auto &light : infiniteLights) {
+        //        pRay.pathL[pRay.depth] += pRay.beta * light.Le(pRay.ray, lambda);
+        //        pRay.Lin += light.Le(pRay.ray, lambda);
+        //    }
         pRay.live = false;
         pRay.noHit = true;
         return;
@@ -1099,10 +1099,10 @@ void GradientIntegrator::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths 
 
     // Account for emissive surface if light was not sampled
     SurfaceInteraction &isect = si->intr;
-    if (pRay.specularBounce) {
-        pRay.pathL[pRay.depth] += pRay.beta * isect.Le(-pRay.ray.d, lambda);
-        pRay.Lin += isect.Le(-pRay.ray.d, lambda);
-    }
+    //if (pRay.specularBounce) {
+    //    pRay.pathL[pRay.depth] += pRay.beta * isect.Le(-pRay.ray.d, lambda);
+    //    pRay.Lin += isect.Le(-pRay.ray.d, lambda);
+    //}
 
     // End path if maximum depth reached
     if (pRay.depth++ == maxDepth) {
@@ -1118,12 +1118,13 @@ void GradientIntegrator::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths 
         pRay.specularBounce = true;
         isect.SkipIntersection(&pRay.ray, si->tHit);
         pRay.live = true;
+        return;
     }
 
     // Sample direct illumination if _sampleLights_ is true
     Vector3f wo = -pRay.ray.d;
     pstd::optional<SampledLight> sampledLight = lightSampler.Sample(randomStorage[0]);
-    if (sampledLight) {
+    if (sampledLight && pRay.depth != 1) {
         // Sample point on _sampledLight_ to estimate direct illumination
         Point2f uLight = Point2f(randomStorage[1], randomStorage[2]);
         pstd::optional<LightLiSample> ls =
@@ -1148,7 +1149,6 @@ void GradientIntegrator::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths 
     if (!bs) {
         pRay.bs = false;
         pRay.live = false;
-        pRay.bs = false;
         return;
     }
 
@@ -1241,46 +1241,33 @@ void GradientIntegrator::ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &l
         return;
     }
 
-    if (!sRay.beta)
-        sRay.live = false;
-
-    if (pRay.prevSpecular ^ sRay.specularBounce)
-        sRay.live = false;
-
-    if (!sRay.live) {
-        sRay.weight[sRay.depth] = 1.0f;
-        if (sRay.depth < maxDepth)
-            sRay.depth++;
-        return;
-    }
-
     // Find next _SimpleGradIntegrator_ vertex and accumulate contribution
     // Intersect _ray_ with scene
     pstd::optional<ShapeIntersection> si = Intersect(sRay.ray);
 
     // Account for infinite lights if ray has no intersection
     if (!si) {
-        if (pRay.noHit)
-            if (sRay.specularBounce)
-                for (const auto &light : infiniteLights) {
-                    sRay.pathL[sRay.depth] += sRay.beta * light.Le(sRay.ray, lambda);
-                }
-        else
-            sRay.weight[sRay.depth] = 1.0f;
+        //if (pRay.noHit) {
+        //    if (sRay.specularBounce)
+        //        for (const auto &light : infiniteLights) {
+        //            sRay.pathL[sRay.depth] += sRay.beta * light.Le(sRay.ray, lambda);
+        //        }
+        //} else{
+        //    sRay.weight[sRay.depth] = 1.0f;
+        //    sRay.pathL[sRay.depth] = SampledSpectrum(0.f);
+        //}
+        sRay.weight[sRay.depth] = 1.f;
+        sRay.pathL[sRay.depth] = SampledSpectrum(0.f);
         sRay.depth++;
         sRay.live = false;
-        if (!pRay.noHit) {
-            sRay.weight[sRay.depth] = 1.0f;
-            sRay.pathL[sRay.depth] = SampledSpectrum(0.f);
-        }
         return;
     }
 
     // Account for emissive surface if light was not sampled
     SurfaceInteraction &isect = si->intr;
-    if (sRay.specularBounce) {
-        sRay.pathL[sRay.depth] += sRay.beta * isect.Le(-sRay.ray.d, lambda);
-    }
+    //if (sRay.specularBounce) {
+    //    sRay.pathL[sRay.depth] += sRay.beta * isect.Le(-sRay.ray.d, lambda);
+    //}
 
     // End path if maximum depth reached
     if (sRay.depth++ == maxDepth) {
@@ -1296,12 +1283,13 @@ void GradientIntegrator::ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &l
         sRay.specularBounce = true;
         isect.SkipIntersection(&sRay.ray, si->tHit);
         sRay.live = true;
+        return;
     }
 
     // Sample direct illumination if _sampleLights_ is true
     Vector3f wo = -sRay.ray.d;
     pstd::optional<SampledLight> sampledLight = lightSampler.Sample(randomStorage[0]);
-    if (sampledLight) {
+    if (sampledLight && sRay.depth != 1) {
         // Sample point on _sampledLight_ to estimate direct illumination
         Point2f uLight = Point2f(randomStorage[1], randomStorage[2]);
         pstd::optional<LightLiSample> ls =
@@ -1363,7 +1351,7 @@ STAT_PERCENT("Integrator/Zero-radiance paths", zeroRadiancePaths, totalPaths);
 STAT_PERCENT("Integrator/Regularized BSDFs", regularizedBSDFs, totalBSDFs);
 STAT_INT_DISTRIBUTION("Integrator/Path length", pathLength);
 
-// GradientIntegrator Method Definitions
+// Stochastic Light Cut Method Definitions
 VPLIntegrator::VPLIntegrator(int maxDepth, Camera camera, Sampler sampler,
                                Primitive aggregate, std::vector<Light> lights,
                                const std::string &lightSampleStrategy, bool regularize)
@@ -1380,26 +1368,26 @@ VPLIntegrator::VPLIntegrator(int maxDepth, Camera camera, Sampler sampler,
 
 void VPLIntegrator::Render() {
     // Handle debugStart, if set
-    if (!Options->debugStart.empty()) {
-        std::vector<int> c = SplitStringToInts(Options->debugStart, ',');
-        if (c.empty())
-            ErrorExit("Didn't find integer values after --debugstart: %s",
-                      Options->debugStart);
-        if (c.size() != 3)
-            ErrorExit("Didn't find three integer values after --debugstart: %s",
-                      Options->debugStart);
-
-        Point2i pPixel(c[0], c[1]);
-        int sampleIndex = c[2];
-
-        ScratchBuffer scratchBuffer(65536);
-        Sampler tileSampler = samplerPrototype.Clone(Allocator());
-        tileSampler.StartPixelSample(pPixel, sampleIndex);
-
-        EvaluatePixelSample(pPixel, sampleIndex, tileSampler, scratchBuffer);
-
-        return;
-    }
+    //if (!Options->debugStart.empty()) {
+    //    std::vector<int> c = SplitStringToInts(Options->debugStart, ',');
+    //    if (c.empty())
+    //        ErrorExit("Didn't find integer values after --debugstart: %s",
+    //                  Options->debugStart);
+    //    if (c.size() != 3)
+    //        ErrorExit("Didn't find three integer values after --debugstart: %s",
+    //                  Options->debugStart);
+    //
+    //    Point2i pPixel(c[0], c[1]);
+    //    int sampleIndex = c[2];
+    //
+    //    ScratchBuffer scratchBuffer(65536);
+    //    Sampler tileSampler = samplerPrototype.Clone(Allocator());
+    //    tileSampler.StartPixelSample(pPixel, sampleIndex);
+    //
+    //    EvaluatePixelSample(pPixel, sampleIndex, tileSampler, scratchBuffer);
+    //
+    //    return;
+    //}
 
     thread_local Point2i threadPixel;
     thread_local int threadSampleIndex;
@@ -1484,7 +1472,7 @@ void VPLIntegrator::Render() {
     {
         ScratchBuffer &scratchBuffer = scratchBuffers.Get();
         Sampler &sampler = samplers.Get();
-        int maxVPL = 100000;
+        int maxVPL = 1000000;
         for (int i = 0; i < maxVPL; i++) {
             PixelSampleVPLGenerator(maxVPL, sampler, scratchBuffer);
         }
@@ -1705,16 +1693,11 @@ SampledSpectrum VPLIntegrator::Li(RayDifferential ray, SampledWavelengths &lambd
 
         // Account for infinite lights if ray has no intersection
         if (!si) {
-            //if (specularBounce)
-            //    for (const auto &light : infiniteLights)
-            //        L += beta * light.Le(ray, lambda);
             break;
         }
         //
         //// Account for emissive surface if light was not sampled
         SurfaceInteraction &isect = si->intr;
-        //if (specularBounce)
-        //    L += beta * isect.Le(-ray.d, lambda);
 
         // End path if maximum depth reached
         if (depth++ == 1)
@@ -1725,33 +1708,11 @@ SampledSpectrum VPLIntegrator::Li(RayDifferential ray, SampledWavelengths &lambd
         if (!bsdf) {
             specularBounce = true;
             isect.SkipIntersection(&ray, si->tHit);
+            depth--;
             continue;
         }
 
-        // Sample direct illumination if _sampleLights_ is true
-        //SampleTreeCuts(10, sampler);
-        L += beta * SampleVPLLd(isect, &bsdf, lambda, sampler, scratchBuffer);
-        //VPLTreeClear();
-
-        Vector3f wo = -ray.d; 
-        
-        //pstd::optional<SampledLight> sampledLight =
-        //    lightSampler.Sample(sampler.Get1D());
-        //if (sampledLight) {
-        //    // Sample point on _sampledLight_ to estimate direct illumination
-        //    Point2f uLight = sampler.Get2D();
-        //    pstd::optional<LightLiSample> ls =
-        //        sampledLight->light.SampleLi(isect, uLight, lambda);
-        //    if (ls && ls->L && ls->pdf > 0) {
-        //        // Evaluate BSDF for light and possibly add scattered radiance
-        //        Vector3f wi = ls->wi;
-        //        SampledSpectrum f = bsdf.f(wo, wi) * AbsDot(wi, isect.shading.n);
-        //        if (f && Unoccluded(isect, ls->pLight)) {
-        //            L += beta * SampleVPLLd(isect, &bsdf, lambda, sampler, scratchBuffer);
-        //        }
-        //    }
-        //}
-        
+        Vector3f wo = -ray.d;
 
         // Sample outgoing direction at intersection to continue path
         // Sample BSDF for new path direction
@@ -1759,13 +1720,17 @@ SampledSpectrum VPLIntegrator::Li(RayDifferential ray, SampledWavelengths &lambd
         pstd::optional<BSDFSample> bs = bsdf.Sample_f(wo, u, sampler.Get2D());
         if (!bs)
             break;
-        beta *= bs->f * AbsDot(bs->wi, isect.shading.n) / bs->pdf;
         specularBounce = bs->IsSpecular();
-        ray = isect.SpawnRay(bs->wi);
+        if (specularBounce) {
+            beta *= bs->f * AbsDot(bs->wi, isect.shading.n) / bs->pdf;
+            ray = isect.SpawnRay(bs->wi);
+            depth--;
+            continue;
+        }
 
-
-        CHECK_GE(beta.y(lambda), 0.f);
-        DCHECK(!IsInf(beta.y(lambda)));
+        // Sample direct illumination if _sampleLights_ is true
+        L += beta * SampleVPLLd(isect, &bsdf, lambda, sampler, scratchBuffer);
+        break;
     }
     return L;
 }
@@ -1823,7 +1788,7 @@ SampledSpectrum VPLIntegrator::SampleVPLLd(const SurfaceInteraction &intr, const
     float prob = 1.f;
     //VPLTreeNodes sampleleaf = SampleTree(&VPLTree[VPLTree.size() - 1][0], intr, bsdf, sampler, scratchBuffer, prob);
     std::vector<VPLTreeNodes> samplePoints = {};
-    int cutSize = 10;
+    int cutSize = 32;
     SampleTreeCuts(cutSize, intr, bsdf, sampler, scratchBuffer, samplePoints);
     for (int i = 0; i < samplePoints.size(); i++) {
         VPL sampleVPL = *samplePoints[i].vpl;
@@ -1884,7 +1849,7 @@ void VPLIntegrator::VPLTreeGenerator() {
     std::vector<VPLTreeNodes> leaves = {};
     for (int i = 0; i < VPLList.size(); i++) {
         leaves.push_back(VPLTreeNodes(&VPLList[i], NULL, NULL, VPLList[i].I));
-        leaves[i].count = 1;
+        leaves[i].depth = 1;
     }
     VPLTree.push_back(leaves);
     int k = 0;
@@ -1899,7 +1864,6 @@ void VPLIntegrator::VPLTreeGenerator() {
             if (node.right == NULL) {
                 node.boundMin = node.left->boundMin;
                 node.boundMax = node.left->boundMax;
-                node.count = node.left->count;
             } else {
                 node.boundMin.x = std::min(node.left->boundMin.x, node.right->boundMin.x);
                 node.boundMin.y = std::min(node.left->boundMin.y, node.right->boundMin.y);
@@ -1907,8 +1871,8 @@ void VPLIntegrator::VPLTreeGenerator() {
                 node.boundMax.x = std::max(node.left->boundMax.x, node.right->boundMax.x);
                 node.boundMax.y = std::max(node.left->boundMax.y, node.right->boundMax.y);
                 node.boundMax.z = std::max(node.left->boundMax.z, node.right->boundMax.z);
-                node.count = node.left->count + node.right->count;
             }
+                node.depth = node.left->depth + 1;
             nodes.push_back(node);
         }
         VPLTree.push_back(nodes);
@@ -1916,26 +1880,17 @@ void VPLIntegrator::VPLTreeGenerator() {
     }
 }
 
-void VPLIntegrator::VPLTreeClear() {
-    for (int i = 0; i < VPLTree.size(); i++) {
-        for (int j = 0; j < VPLTree[i].size(); j++) {
-            if (i != 0)
-                VPLTree[i][j].vpl = NULL;
-        }
-    }
-}
-
 Float VPLIntegrator::MinimumDistance(Point3f sample, Point3f BBMin, Point3f BBMax) {
     Float dmin;
     Vector3i checkL;
     Float diag = Distance(BBMin, BBMax);
-    Float alpha = 1.f;
+    Float alpha = 0.5f;
     checkL = Vector3i(((sample.x - BBMin.x) * (sample.x - BBMax.x) < 0),
                       ((sample.y - BBMin.y) * (sample.y - BBMax.y) < 0),
                       ((sample.z - BBMin.z) * (sample.z - BBMax.z) < 0));
 
     if (checkL.x + checkL.y + checkL.z == 3) {
-        dmin = 1.f;
+        return dmin = 0.f;
     } else if (checkL.x + checkL.y + checkL.z == 2) {
         dmin = std::min(fabs((!checkL.x) * (sample.x - BBMin.x) +
                                  (!checkL.y) * (sample.y - BBMin.y) +
@@ -1962,7 +1917,7 @@ Float VPLIntegrator::MinimumDistance(Point3f sample, Point3f BBMin, Point3f BBMa
                             Point3f(0.f, 0.f, 0.f));
     }
 
-    dmin = dmin > alpha * diag ? dmin : 1.f;
+    //dmin = dmin > alpha * diag ? dmin : 1.f;
     return dmin;
 }
 
@@ -2000,51 +1955,80 @@ Float VPLIntegrator::MaximumCosine(Point3f shadingPoint, Normal3f shadingNormal,
 
 VPLTreeNodes VPLIntegrator::SampleTree(VPLTreeNodes *vplNode,
                                        const SurfaceInteraction &intr, const BSDF *bsdf,
-                                       Sampler sampler, ScratchBuffer &scratchBuffer,
+                                       Float randomNumber, ScratchBuffer &scratchBuffer,
                                        float &prob) {
     if (vplNode->left == NULL && vplNode->right == NULL) {
         return *vplNode;
     } else if (vplNode->left == NULL || vplNode->right == NULL) {
         if (vplNode->left == NULL) {
             vplNode->right->prob = 1.f;
-            return SampleTree(vplNode->right, intr, bsdf, sampler, scratchBuffer, prob);
+            return SampleTree(vplNode->right, intr, bsdf, randomNumber, scratchBuffer, prob);
         } else {
             vplNode->left->prob = 1.f;
-            return SampleTree(vplNode->left, intr, bsdf, sampler, scratchBuffer, prob);
+            return SampleTree(vplNode->left, intr, bsdf, randomNumber, scratchBuffer,
+                              prob);
         }
     } else {
-        Float dminLeft, dminRight;
-        dminLeft =
-            MinimumDistance(intr.p(), vplNode->left->boundMin, vplNode->left->boundMax);
-        dminRight =
-            MinimumDistance(intr.p(), vplNode->right->boundMin, vplNode->right->boundMax);
-
-        if (dminLeft == 1.f || dminRight == 1.f) {
-            dminLeft = 1.f;
-            dminRight = 1.f;
-        }
+        Float w1 = vplNode->right->I.Average();
+        Float w2 = vplNode->left->I.Average();
 
         Float cosLeft, cosRight;
         cosLeft = MaximumCosine(intr.p(), intr.n, vplNode->left->boundMin,
                                 vplNode->left->boundMax);
         cosRight = MaximumCosine(intr.p(), intr.n, vplNode->right->boundMin,
                                 vplNode->right->boundMax);
+        w1 *= cosRight;
+        w2 *= cosLeft;
 
-        float w1 = vplNode->right->I.Average() * cosRight / (dminRight * dminRight);
-        float w2 = vplNode->left->I.Average() * cosLeft / (dminLeft * dminLeft);
+        Float dminLeft, dminRight;
+        dminLeft =
+            MinimumDistance(intr.p(), vplNode->left->boundMin, vplNode->left->boundMax);
+        dminRight =
+            MinimumDistance(intr.p(), vplNode->right->boundMin, vplNode->right->boundMax);
+        Float diagLeft = Distance(vplNode->left->boundMin, vplNode->left->boundMax);
+        Float diagRight = Distance(vplNode->right->boundMin, vplNode->right->boundMax);
+        Float alpha = 1.f;
+
+        if (dminLeft == 0.f || dminRight == 0.f) {
+            if (dminLeft == 0.f) {
+                dminLeft = 1.f;
+                vplNode->left->error = std::numeric_limits<Float>::max();
+            }
+            if (dminRight == 0.f) {
+                dminRight = 1.f;
+                vplNode->right->error = std::numeric_limits<Float>::max();
+            }
+        } else {
+            vplNode->left->error += w2 / (dminLeft * dminLeft);
+            vplNode->right->error += w1 / (dminRight * dminRight);
+        }
+
+
+        dminLeft = dminLeft > alpha * diagLeft ? dminLeft : 1.f;
+        dminRight = dminRight > alpha * diagRight ? dminRight : 1.f;
+
+        if (dminRight == 1.f || dminLeft == 1.f) {
+            dminLeft = 1.f;
+            dminRight = 1.f;
+        }
+
+        w1 = w1 / (dminRight * dminRight);
+        w2 = w2 / (dminLeft * dminLeft);
+
         if (w1 + w2) {
             float p = w1 / (w1 + w2);
             vplNode->left->prob = (1 - p);
             vplNode->right->prob = p;
-            if (sampler.Get1D() > p) {
+            if (randomNumber > p) {
                 vplNode->sampledLeft = true;
                 prob = prob * (1 - p);
-                return SampleTree(vplNode->left, intr, bsdf, sampler, scratchBuffer,
+                return SampleTree(vplNode->left, intr, bsdf, (randomNumber - p) / (1 - p),
+                                  scratchBuffer,
                                   prob);
             } else {
                 vplNode->sampledLeft = false;
                 prob = prob * p;
-                return SampleTree(vplNode->right, intr, bsdf, sampler, scratchBuffer,
+                return SampleTree(vplNode->right, intr, bsdf, randomNumber / p, scratchBuffer,
                                   prob);
             }
         } else {
@@ -2060,14 +2044,17 @@ void VPLIntegrator::SampleTreeCuts(int cutSize, const SurfaceInteraction &intr,
                                    ScratchBuffer &scratchBuffer, std::vector<VPLTreeNodes> &samplePoints) {
     float prob = 1.f;
     samplePoints = {};
-    VPL *sample = SampleTree(&VPLTree[VPLTree.size() - 1][0], intr, bsdf, sampler,
+    Float rn = sampler.Get1D();
+    VPL *sample = SampleTree(&VPLTree[VPLTree.size() - 1][0], intr, bsdf, rn,
                                      scratchBuffer, prob).vpl;
     VPLTreeNodes first = VPLTree[VPLTree.size() - 1][0];
     first.vpl = sample;
     first.prob = prob;
+    first.error = std::numeric_limits<Float>::max();
     samplePoints.push_back(first);
     while (samplePoints.size() < cutSize && samplePoints.size() < VPLList.size()) {
         int size = samplePoints.size();
+        int i = 0;
         for (int i = 0; i < size; i++) {
             if (samplePoints[i].left == NULL && samplePoints[i].right == NULL)
                 continue;
@@ -2088,8 +2075,9 @@ void VPLIntegrator::SampleTreeCuts(int cutSize, const SurfaceInteraction &intr,
                     prob = 1.f;
                     Float rightProb = samplePoints[i].prob;
                     Float p1 = samplePoints[i].right->prob;
+                    rn = sampler.Get1D();
                     VPL *leftSample = SampleTree(samplePoints[i].left, intr, bsdf,
-                                                   sampler, scratchBuffer, prob).vpl;
+                                                   rn, scratchBuffer, prob).vpl;
                     VPL *rightSample = samplePoints[i].vpl;
                     VPLTreeNodes temp = *samplePoints[i].left;
                     temp.vpl = leftSample;
@@ -2102,8 +2090,9 @@ void VPLIntegrator::SampleTreeCuts(int cutSize, const SurfaceInteraction &intr,
                     prob =1.f;
                     Float leftProb = samplePoints[i].prob;
                     Float p1 = samplePoints[i].left->prob;
+                    rn = sampler.Get1D();
                     VPL *rightSample = SampleTree(samplePoints[i].right, intr, bsdf,
-                                                   sampler, scratchBuffer, prob).vpl;
+                                                   rn, scratchBuffer, prob).vpl;
                     VPL *leftSample = samplePoints[i].vpl;
                     VPLTreeNodes temp = *samplePoints[i].right;
                     temp.vpl = rightSample;
@@ -2117,6 +2106,8 @@ void VPLIntegrator::SampleTreeCuts(int cutSize, const SurfaceInteraction &intr,
             if (samplePoints.size() >= cutSize ||
                 samplePoints.size() >= VPLList.size())
                 break;
+            //std::sort(samplePoints.begin(), samplePoints.end(),
+            //          [](VPLTreeNodes a, VPLTreeNodes b) { return a.error > b.error; });
         }
     }
 }
@@ -2131,6 +2122,908 @@ std::unique_ptr<VPLIntegrator> VPLIntegrator::Create(
     Primitive aggregate, std::vector<Light> lights, const FileLoc *loc) {
     int maxDepth = parameters.GetOneInt("maxdepth", 5);
     return std::make_unique<VPLIntegrator>(maxDepth, camera, sampler, aggregate, lights);
+}
+
+
+
+// Stochastic Light Cuts with Gradient Domain
+void VPLGradient::Render() {
+    // Handle debugStart, if set
+    //if (!Options->debugStart.empty()) {
+    //    std::vector<int> c = SplitStringToInts(Options->debugStart, ',');
+    //    if (c.empty())
+    //        ErrorExit("Didn't find integer values after --debugstart: %s",
+    //                  Options->debugStart);
+    //    if (c.size() != 3)
+    //        ErrorExit("Didn't find three integer values after --debugstart: %s",
+    //                  Options->debugStart);
+    //
+    //    Point2i pPixel(c[0], c[1]);
+    //    int sampleIndex = c[2];
+    //
+    //    ScratchBuffer scratchBuffer(65536);
+    //    Sampler tileSampler = samplerPrototype.Clone(Allocator());
+    //    tileSampler.StartPixelSample(pPixel, sampleIndex);
+    //
+    //    EvaluatePixelSample(pPixel, sampleIndex, tileSampler, scratchBuffer);
+    //
+    //    return;
+    //}
+
+    thread_local Point2i threadPixel;
+    thread_local int threadSampleIndex;
+    CheckCallbackScope _([&]() {
+        return StringPrintf("Rendering failed at pixel (%d, %d) sample %d. Debug with "
+                            "\"--debugstart %d,%d,%d\"\n",
+                            threadPixel.x, threadPixel.y, threadSampleIndex,
+                            threadPixel.x, threadPixel.y, threadSampleIndex);
+    });
+
+    // Declare common variables for rendering image in tiles
+    ThreadLocal<ScratchBuffer> scratchBuffers([]() { return ScratchBuffer(); });
+
+    ThreadLocal<Sampler> samplers([this]() { return samplerPrototype.Clone(); });
+
+    Bounds2i pixelBounds = camera.GetFilm().PixelBounds();
+    int spp = samplerPrototype.SamplesPerPixel();
+    ProgressReporter progress(int64_t(spp) * pixelBounds.Area(), "Rendering",
+                              Options->quiet);
+
+    int waveStart = 0, waveEnd = 1, nextWaveSize = 1;
+
+    if (Options->recordPixelStatistics)
+        StatsEnablePixelStats(pixelBounds,
+                              RemoveExtension(camera.GetFilm().GetFilename()));
+    // Handle MSE reference image, if provided
+    pstd::optional<Image> referenceImage;
+    FILE *mseOutFile = nullptr;
+    if (!Options->mseReferenceImage.empty()) {
+        auto mse = Image::Read(Options->mseReferenceImage);
+        referenceImage = mse.image;
+
+        Bounds2i msePixelBounds =
+            mse.metadata.pixelBounds
+                ? *mse.metadata.pixelBounds
+                : Bounds2i(Point2i(0, 0), referenceImage->Resolution());
+        if (!Inside(pixelBounds, msePixelBounds))
+            ErrorExit("Output image pixel bounds %s aren't inside the MSE "
+                      "image's pixel bounds %s.",
+                      pixelBounds, msePixelBounds);
+
+        // Transform the pixelBounds of the image we're rendering to the
+        // coordinate system with msePixelBounds.pMin at the origin, which
+        // in turn gives us the section of the MSE image to crop. (This is
+        // complicated by the fact that Image doesn't support pixel
+        // bounds...)
+        Bounds2i cropBounds(Point2i(pixelBounds.pMin - msePixelBounds.pMin),
+                            Point2i(pixelBounds.pMax - msePixelBounds.pMin));
+        *referenceImage = referenceImage->Crop(cropBounds);
+        CHECK_EQ(referenceImage->Resolution(), Point2i(pixelBounds.Diagonal()));
+
+        mseOutFile = FOpenWrite(Options->mseReferenceOutput);
+        if (!mseOutFile)
+            ErrorExit("%s: %s", Options->mseReferenceOutput, ErrorString());
+    }
+
+    // Connect to display server if needed
+    if (!Options->displayServer.empty()) {
+        Film film = camera.GetFilm();
+        DisplayDynamic(film.GetFilename(), Point2i(pixelBounds.Diagonal()),
+                       {"R", "G", "B"},
+                       [&](Bounds2i b, pstd::span<pstd::span<float>> displayValue) {
+                           int index = 0;
+                           for (Point2i p : b) {
+                               RGB rgb = film.GetPixelRGB(pixelBounds.pMin + p,
+                                                          2.f / (waveStart + waveEnd));
+                               for (int c = 0; c < 3; ++c)
+                                   displayValue[c][index] = rgb[c];
+                               ++index;
+                           }
+                       });
+    }
+
+
+    //VPL Generation
+    {
+        ScratchBuffer &scratchBuffer = scratchBuffers.Get();
+        Sampler &sampler = samplers.Get();
+        int maxVPL = 100000;
+        for (int i = 0; i < maxVPL; i++) {
+            PixelSampleVPLGenerator(maxVPL, sampler, scratchBuffer);
+        }
+    }
+
+    VPLTreeGenerator();
+
+    // Render image in waves
+    while (waveStart < spp) {
+        // Render current wave's image tiles in parallel
+        ParallelFor2D(pixelBounds, [&](Bounds2i tileBounds) {
+            // Render image tile given by _tileBounds_
+            ScratchBuffer &scratchBuffer = scratchBuffers.Get();
+            Sampler &sampler = samplers.Get();
+            PBRT_DBG("Starting image tile (%d,%d)-(%d,%d) waveStart %d, waveEnd %d\n",
+                     tileBounds.pMin.x, tileBounds.pMin.y, tileBounds.pMax.x,
+                     tileBounds.pMax.y, waveStart, waveEnd);
+            for (Point2i pPixel : tileBounds) {
+                StatsReportPixelStart(pPixel);
+                threadPixel = pPixel;
+                // Render samples in pixel _pPixel_
+                for (int sampleIndex = waveStart; sampleIndex < waveEnd; ++sampleIndex) {
+                    threadSampleIndex = sampleIndex;
+                    sampler.StartPixelSample(pPixel, sampleIndex);
+                    GradEvaluatePixelSample(pPixel, sampleIndex, sampler, scratchBuffer);
+                    scratchBuffer.Reset();
+                }
+        
+                StatsReportPixelEnd(pPixel);
+            }
+            PBRT_DBG("Finished image tile (%d,%d)-(%d,%d)\n", tileBounds.pMin.x,
+                     tileBounds.pMin.y, tileBounds.pMax.x, tileBounds.pMax.y);
+            progress.Update((waveEnd - waveStart) * tileBounds.Area());
+        });
+
+        // Update start and end wave
+        waveStart = waveEnd;
+        waveEnd = std::min(spp, waveEnd + nextWaveSize);
+        if (!referenceImage)
+            nextWaveSize = std::min(2 * nextWaveSize, 64);
+        if (waveStart == spp)
+            progress.Done();
+
+        // Optionally write current image to disk
+        if (waveStart == spp || Options->writePartialImages || referenceImage) {
+            LOG_VERBOSE("Writing image with spp = %d", waveStart);
+            ImageMetadata metadata;
+            metadata.renderTimeSeconds = progress.ElapsedSeconds();
+            metadata.samplesPerPixel = waveStart;
+            if (referenceImage) {
+                ImageMetadata filmMetadata;
+                Image filmImage =
+                    camera.GetFilm().GetImage(&filmMetadata, 1.f / waveStart);
+                ImageChannelValues mse =
+                    filmImage.MSE(filmImage.AllChannelsDesc(), *referenceImage);
+                fprintf(mseOutFile, "%d, %.9g\n", waveStart, mse.Average());
+                metadata.MSE = mse.Average();
+                fflush(mseOutFile);
+            }
+            if (waveStart == spp || Options->writePartialImages) {
+                camera.InitMetadata(&metadata);
+                camera.GetFilm().WriteImage(metadata, 1.0f / waveStart);
+            }
+        }
+    }
+
+    SampledWavelengths lambda = camera.GetFilm().SampleWavelengths(0.5f);
+    Filter filter = camera.GetFilm().GetFilter();
+    int iteration = 0;
+    while (iteration < 25) {
+        ParallelFor2D(pixelBounds, [&](Bounds2i tileBounds) {
+            // Render image tile given by _tileBounds_
+            for (Point2i pPixel : tileBounds) {
+                SampledSpectrum v(0.f);
+                Float count = 1.f;
+                Sampler &sampler = samplers.Get();
+                CameraSample cameraSample = GetCameraSample(sampler, pPixel, filter);
+                v += Primal[pPixel.x][pPixel.y];
+                if (pPixel.x - 1 >= pixelBounds.pMin.x) {
+                    v += Primal[pPixel.x - 1][pPixel.y] + xGrad[pPixel.x][pPixel.y];
+                    count++;
+                }
+                if (pPixel.y - 1 >= pixelBounds.pMin.y) {
+                    v += Primal[pPixel.x][pPixel.y - 1] + yGrad[pPixel.x][pPixel.y];
+                    count++;
+                }
+                if (pPixel.x + 1 < pixelBounds.pMax.x) {
+                    v += Primal[pPixel.x + 1][pPixel.y] - xGrad[pPixel.x + 1][pPixel.y];
+                    count++;
+                }
+                if (pPixel.y + 1 < pixelBounds.pMax.y) {
+                    v += Primal[pPixel.x][pPixel.y + 1] - yGrad[pPixel.x][pPixel.y + 1];
+                    count++;
+                }
+                Temp[pPixel.x][pPixel.y] = v / count;
+                camera.GetFilm().ResetPixel(pPixel);
+                camera.GetFilm().AddSample(pPixel, v / count, lambda, nullptr,
+                                           cameraSample.filterWeight);
+            }
+        });
+        Primal = Temp;
+        iteration++;
+    }
+
+    // Optionally write current image to disk
+    ImageMetadata metadata;
+    metadata.renderTimeSeconds = progress.ElapsedSeconds();
+    metadata.samplesPerPixel = waveStart;
+    if (referenceImage) {
+        ImageMetadata filmMetadata;
+        Image filmImage = camera.GetFilm().GetImage(&filmMetadata, 1.f / waveStart);
+        ImageChannelValues mse =
+            filmImage.MSE(filmImage.AllChannelsDesc(), *referenceImage);
+        fprintf(mseOutFile, "%d, %.9g\n", waveStart, mse.Average());
+        metadata.MSE = mse.Average();
+        fflush(mseOutFile);
+    }
+    camera.InitMetadata(&metadata);
+    camera.GetFilm().WriteImage(metadata, 1.0f / waveStart);
+
+    if (mseOutFile)
+        fclose(mseOutFile);
+    DisconnectFromDisplayServer();
+    LOG_VERBOSE("Rendering finished");
+}
+
+void VPLGradient::GradEvaluatePixelSample(Point2i pPixel, int sampleIndex,
+                                                 Sampler sampler,
+                                                 ScratchBuffer &scratchBuffer) {
+    // Sample wavelengths for the ray
+    Float lu = sampler.Get1D();
+    if (Options->disableWavelengthJitter)
+        lu = 0.5;
+    SampledWavelengths lambda = camera.GetFilm().SampleWavelengths(lu);
+
+    // Initialize _CameraSample_ for current sample
+    Filter filter = camera.GetFilm().GetFilter();
+    CameraSample cameraSample = GetCameraSample(sampler, pPixel, filter);
+    CameraSample dx0CameraSample = cameraSample;
+    dx0CameraSample.pFilm += Point2i(1, 0);
+    CameraSample dy0CameraSample = cameraSample;
+    dy0CameraSample.pFilm += Point2i(0, 1);
+    CameraSample dx1CameraSample = cameraSample;
+    dx1CameraSample.pFilm += Point2i(-1, 0);
+    CameraSample dy1CameraSample = cameraSample;
+    dy1CameraSample.pFilm += Point2i(0, -1);
+
+    // Generate camera ray for current sample
+    pstd::optional<CameraRayDifferential> cameraRay =
+        camera.GenerateRayDifferential(cameraSample, lambda);
+    pstd::optional<CameraRayDifferential> dx0CameraRay =
+        camera.GenerateRayDifferential(dx0CameraSample, lambda);
+    pstd::optional<CameraRayDifferential> dx1CameraRay =
+        camera.GenerateRayDifferential(dx1CameraSample, lambda);
+    pstd::optional<CameraRayDifferential> dy0CameraRay =
+        camera.GenerateRayDifferential(dy0CameraSample, lambda);
+    pstd::optional<CameraRayDifferential> dy1CameraRay =
+        camera.GenerateRayDifferential(dy1CameraSample, lambda);
+
+    // Trace _cameraRay_ if valid
+    VisibleSurface visibleSurface;
+    SampledSpectrum L(0.f);
+
+    // Create the 5 necessary rays
+    PrimalRay pRay(cameraRay->ray);
+    pRay.pathL = std::vector<SampledSpectrum>(1, SampledSpectrum(0.0f));
+
+    ShiftRay sRay[4] = {ShiftRay(dx0CameraRay->ray), ShiftRay(dy0CameraRay->ray),
+                        ShiftRay(dx1CameraRay->ray), ShiftRay(dy1CameraRay->ray)};
+    for (int i = 0; i < 4; i++) {
+        sRay[i].pathL = std::vector<SampledSpectrum>(1, SampledSpectrum(0.0f));
+        sRay[i].weight = std::vector<Float>(1, 0.5f);
+    }
+
+    if (cameraRay) {
+        // Double check that the ray's direction is normalized.
+        DCHECK_GT(Length(cameraRay->ray.d), .999f);
+        DCHECK_LT(Length(cameraRay->ray.d), 1.001f);
+        // Scale camera ray differentials based on image sampling rate
+        Float rayDiffScale =
+            std::max<Float>(.125f, 1 / std::sqrt((Float)sampler.SamplesPerPixel()));
+        if (!Options->disablePixelJitter) {
+            cameraRay->ray.ScaleDifferentials(rayDiffScale);
+            dx0CameraRay->ray.ScaleDifferentials(rayDiffScale);
+            dx1CameraRay->ray.ScaleDifferentials(rayDiffScale);
+            dy0CameraRay->ray.ScaleDifferentials(rayDiffScale);
+            dy1CameraRay->ray.ScaleDifferentials(rayDiffScale);
+        }
+        ++nCameraRays;
+
+        // Evaluate radiance along camera ray
+        bool initializeVisibleSurface = camera.GetFilm().UsesVisibleSurface();
+        //bool live = true;
+        //while (live) {
+            Float randomStorage[6];
+
+            //--------------------------------------Primal -
+            //Implementation---------------------------------------//
+            sampler.Clear();
+            PrimalRayPropogate(pRay, lambda, sampler, scratchBuffer,
+                               initializeVisibleSurface ? &visibleSurface : nullptr,
+                               randomStorage);
+            //live = pRay.live;
+            //--------------------------------------Primal -
+            //End---------------------------------------//
+
+            //--------------------------------------Shift -
+            //Implementation---------------------------------------//
+
+            for (int i = 0; i < 4; i++) {
+                sampler.Clear();
+                ShiftRayPropogate(sRay[i], lambda, sampler, scratchBuffer,
+                                  initializeVisibleSurface ? &visibleSurface : nullptr,
+                                  randomStorage, pRay);
+                //live = live || sRay[i].live;
+            }
+
+            //--------------------------------------Shift -
+            //End---------------------------------------//
+        //}
+
+        // Issue warning if unexpected radiance value is returned
+        if (L.HasNaNs()) {
+            LOG_ERROR("Not-a-number radiance value returned for pixel (%d, "
+                      "%d), sample %d. Setting to black.",
+                      pPixel.x, pPixel.y, sampleIndex);
+            L = SampledSpectrum(0.f);
+        } else if (IsInf(L.y(lambda))) {
+            LOG_ERROR("Infinite radiance value returned for pixel (%d, %d), "
+                      "sample %d. Setting to black.",
+                      pPixel.x, pPixel.y, sampleIndex);
+            L = SampledSpectrum(0.f);
+        }
+
+        if (cameraRay)
+            PBRT_DBG(
+                "%s\n",
+                StringPrintf("Camera sample: %s -> ray %s -> L = %s, visibleSurface %s",
+                             cameraSample, cameraRay->ray, L,
+                             (visibleSurface ? visibleSurface.ToString() : "(none)"))
+                    .c_str());
+        else
+            PBRT_DBG("%s\n",
+                     StringPrintf("Camera sample: %s -> no ray generated", cameraSample)
+                         .c_str());
+    }
+
+    // This will keep increasing indefinitely for more number of samples and the technique
+    // will fail here
+    SampledSpectrum s(0.f);
+    for (int i = 0; i < 1; i++) {
+        s += pRay.pathL[i];
+        xGrad[pPixel.x][pPixel.y] += sRay[2].weight[i] *
+                                     (pRay.pathL[i] - sRay[2].pathL[i]) /
+                                     sampler.SamplesPerPixel();
+        yGrad[pPixel.x][pPixel.y] += sRay[3].weight[i] *
+                                     (pRay.pathL[i] - sRay[3].pathL[i]) /
+                                     sampler.SamplesPerPixel();
+        xGrad[pPixel.x + 1][pPixel.y] += sRay[0].weight[i] *
+                                         (sRay[0].pathL[i] - pRay.pathL[i]) /
+                                         sampler.SamplesPerPixel();
+        yGrad[pPixel.x][pPixel.y + 1] += sRay[1].weight[0] *
+                                         (sRay[1].pathL[i] - pRay.pathL[i]) /
+                                         sampler.SamplesPerPixel();
+    }
+
+    Primal[pPixel.x][pPixel.y] += s / sampler.SamplesPerPixel();
+
+    // xGrad[pPixel.x][pPixel.y]       += weights[2] * (s - sRay[2].L) /
+    // sampler.SamplesPerPixel(); yGrad[pPixel.x][pPixel.y]       += weights[3] * (s -
+    // sRay[3].L) / sampler.SamplesPerPixel(); xGrad[pPixel.x + 1][pPixel.y]   +=
+    // weights[0] * (sRay[0].L - s) / sampler.SamplesPerPixel(); yGrad[pPixel.x][pPixel.y
+    // + 1]   += weights[1] * (sRay[1].L - s) / sampler.SamplesPerPixel();
+
+    // Add camera ray's contribution to image
+    // Check AddSample code for weird stuff like weighing the sample
+    camera.GetFilm().ResetPixel(pPixel);
+    camera.GetFilm().AddSample(pPixel, yGrad[pPixel.x][pPixel.y], lambda, &visibleSurface,
+                               cameraSample.filterWeight);
+}
+
+void VPLGradient::PixelSampleVPLGenerator(int maxVPL, Sampler sampler,
+                                            ScratchBuffer &scratchBuffer) {
+    // Sample wavelengths for the ray
+    Float lu = sampler.Get1D();
+    if (Options->disableWavelengthJitter)
+        lu = 0.5;
+    SampledWavelengths lambda = camera.GetFilm().SampleWavelengths(lu);
+
+    // Sample light to start light path
+    Float ul = sampler.Get1D();
+    pstd::optional<SampledLight> sampledLight = lightSampler.Sample(ul);
+    if (!sampledLight)
+        return;
+    Light light = sampledLight->light;
+    Float p_l = sampledLight->p;
+
+    // Sample point on light source for light path
+    Float time = camera.SampleTime(sampler.Get1D());
+    Point2f ul0 = sampler.Get2D();
+    Point2f ul1 = sampler.Get2D();
+    pstd::optional<LightLeSample> les = light.SampleLe(ul0, ul1, lambda, time);
+    if (!les || les->pdfPos == 0 || les->pdfDir == 0 || !les->L)
+        return;
+
+    // Follow light path and accumulate contributions to image
+    int depth = 0;
+    // Initialize light path ray and weighted path throughput _beta_
+    RayDifferential ray(les->ray);
+    SampledSpectrum beta =
+        les->L * les->AbsCosTheta(ray.d) / (p_l * les->pdfPos * les->pdfDir);
+
+    bool isSpecular = true;
+    while (true) {
+        // Intersect light path ray with scene
+        pstd::optional<ShapeIntersection> si = Intersect(ray);
+        if (!si)
+            break;
+        SurfaceInteraction &isect = si->intr;
+
+        // Get BSDF and skip over medium boundaries
+        BSDF bsdf = isect.GetBSDF(ray, lambda, camera, scratchBuffer, sampler);
+        if (!bsdf) {
+            isect.SkipIntersection(&ray, si->tHit);
+            continue;
+        }
+
+        // End path if maximum depth reached
+        if (depth++ == maxDepth)
+            break;
+
+        // Sample BSDF and update light path state
+        Float uc = sampler.Get1D();
+        pstd::optional<BSDFSample> bs =
+            bsdf.Sample_f(isect.wo, uc, sampler.Get2D(), TransportMode::Importance);
+        if (!bs)
+            break;
+        isSpecular = bs->IsSpecular();
+        if (!isSpecular) {
+            VPLList.push_back(VPL(beta / maxVPL, isect, ray, lambda, isect.p()));
+        }
+        beta *= bs->f * AbsDot(bs->wi, isect.shading.n) / bs->pdf;
+        ray = isect.SpawnRay(ray, bsdf, bs->wi, bs->flags, bs->eta);
+    }
+}
+
+SampledSpectrum VPLGradient::SampleVPLLd(const SurfaceInteraction &intr,
+                                           const BSDF *bsdf, SampledWavelengths &lambda,
+                                           Sampler sampler,
+                                           ScratchBuffer &scratchBuffer) {
+    // Choose a light source for the direct lighting calculation
+    SampledSpectrum sampledLd(0.f);
+    std::vector<VPLTreeNodes> samplePoints = {};
+    int cutSize = 10;
+    SampleTreeCuts(cutSize, intr, bsdf, sampler, scratchBuffer, samplePoints);
+    for (int i = 0; i < samplePoints.size(); i++) {
+        VPL sampleVPL = *samplePoints[i].vpl;
+        BSDF vplBSDF = sampleVPL.isect.GetBSDF(sampleVPL.ray, sampleVPL.lambda, camera,
+                                               scratchBuffer, sampler);
+
+        if (!sampleVPL.I || !vplBSDF)
+            continue;
+
+        // Evaluate BSDF for light sample and check light visibility
+        Vector3f wo = intr.wo, wi = Normalize(sampleVPL.point - intr.p());
+        Float distance = Length(sampleVPL.point - intr.p());
+        SampledSpectrum f = bsdf->f(wo, wi) * AbsDot(wi, intr.shading.n);
+        SampledSpectrum fL =
+            vplBSDF.f(-sampleVPL.isect.wo, wi) * AbsDot(wi, sampleVPL.isect.shading.n);
+        if (!f || !Unoccluded(intr, sampleVPL.isect))
+            continue;
+        else {
+            sampledLd +=
+                sampleVPL.I * f * fL / (distance * distance * samplePoints[i].prob);
+        }
+    }
+    return sampledLd;
+}
+
+void VPLGradient::VPLTreeGenerator() {
+    // Sorting
+    int i = 0;
+    int check = VPLList.size();
+    int remainder = 0;
+    while (check) {
+        int index = 0;
+        for (int j = 0; j < pow(2, i); j++) {
+            if (remainder > 0) {
+                std::sort(VPLList.begin() + index, VPLList.begin() + index + check + 1,
+                          [i](const VPL lhs, const VPL rhs) {
+                              return lhs.point[i % 3] > rhs.point[i % 3];
+                          });
+                index = index + check + 1;
+                remainder--;
+            } else {
+                std::sort(VPLList.begin() + index, VPLList.begin() + index + check,
+                          [i](const VPL lhs, const VPL rhs) {
+                              return lhs.point[i % 3] > rhs.point[i % 3];
+                          });
+                index = index + check;
+            }
+        }
+        i++;
+        check = VPLList.size() / pow(2, i);
+        remainder = VPLList.size() - pow(2, i) * check;
+    }
+
+    // Tree Generation
+    std::vector<VPLTreeNodes> leaves = {};
+    for (int i = 0; i < VPLList.size(); i++) {
+        leaves.push_back(VPLTreeNodes(&VPLList[i], NULL, NULL, VPLList[i].I));
+        leaves[i].depth = 1;
+    }
+    VPLTree.push_back(leaves);
+    int k = 0;
+    while (VPLTree[k].size() > 1) {
+        std::vector<VPLTreeNodes> nodes = {};
+        for (int i = 0; i < VPLTree[k].size(); i += 2) {
+            SampledSpectrum temp =
+                VPLTree[k][i].I +
+                (i + 1 < VPLTree[k].size() ? VPLTree[k][i + 1].I : SampledSpectrum(0.f));
+            VPLTreeNodes node(NULL, &VPLTree[k][i],
+                              i + 1 < VPLTree[k].size() ? &VPLTree[k][i + 1] : NULL,
+                              temp);
+            if (node.right == NULL) {
+                node.boundMin = node.left->boundMin;
+                node.boundMax = node.left->boundMax;
+            } else {
+                node.boundMin.x = std::min(node.left->boundMin.x, node.right->boundMin.x);
+                node.boundMin.y = std::min(node.left->boundMin.y, node.right->boundMin.y);
+                node.boundMin.z = std::min(node.left->boundMin.z, node.right->boundMin.z);
+                node.boundMax.x = std::max(node.left->boundMax.x, node.right->boundMax.x);
+                node.boundMax.y = std::max(node.left->boundMax.y, node.right->boundMax.y);
+                node.boundMax.z = std::max(node.left->boundMax.z, node.right->boundMax.z);
+            }
+            node.depth = node.left->depth + 1;
+            nodes.push_back(node);
+        }
+        VPLTree.push_back(nodes);
+        k = VPLTree.size() - 1;
+    }
+}
+
+Float VPLGradient::MinimumDistance(Point3f sample, Point3f BBMin, Point3f BBMax) {
+    Float dmin;
+    Vector3i checkL;
+    Float diag = Distance(BBMin, BBMax);
+    Float alpha = 0.5f;
+    checkL = Vector3i(((sample.x - BBMin.x) * (sample.x - BBMax.x) < 0),
+                      ((sample.y - BBMin.y) * (sample.y - BBMax.y) < 0),
+                      ((sample.z - BBMin.z) * (sample.z - BBMax.z) < 0));
+
+    if (checkL.x + checkL.y + checkL.z == 3) {
+        return dmin = 0.f;
+    } else if (checkL.x + checkL.y + checkL.z == 2) {
+        dmin = std::min(
+            fabs((!checkL.x) * (sample.x - BBMin.x) + (!checkL.y) * (sample.y - BBMin.y) +
+                 (!checkL.z) * (sample.z - BBMin.z)),
+            fabs((!checkL.x) * (sample.x - BBMax.x) + (!checkL.y) * (sample.y - BBMax.y) +
+                 (!checkL.z) * (sample.z - BBMax.z)));
+    } else if (checkL.x + checkL.y + checkL.z == 1) {
+        dmin = Distance(Point3f(std::min(fabs((!checkL.x) * (sample.x - BBMin.x)),
+                                         fabs((!checkL.x) * (sample.x - BBMax.x))),
+                                std::min(fabs((!checkL.y) * (sample.y - BBMin.y)),
+                                         fabs((!checkL.y) * (sample.y - BBMax.y))),
+                                std::min(fabs((!checkL.z) * (sample.z - BBMin.z)),
+                                         fabs((!checkL.z) * (sample.z - BBMax.z)))),
+                        Point3f(0.f, 0.f, 0.f));
+    } else {
+        dmin = Distance(
+            Point3f(std::min(fabs((sample.x - BBMin.x)), fabs((sample.x - BBMax.x))),
+                    std::min(fabs((sample.y - BBMin.y)), fabs((sample.y - BBMax.y))),
+                    std::min(fabs((sample.z - BBMin.z)), fabs((sample.z - BBMax.z)))),
+            Point3f(0.f, 0.f, 0.f));
+    }
+
+    // dmin = dmin > alpha * diag ? dmin : 1.f;
+    return dmin;
+}
+
+Float VPLGradient::MaximumCosine(Point3f shadingPoint, Normal3f shadingNormal,
+                                   Point3f BBMin, Point3f BBMax) {
+    Point3f centre = (BBMax + BBMin) / 2;
+    Float radius = fabs(Distance(BBMax, BBMin) / 2.f);
+    Float distance = fabs(Distance(shadingPoint, centre));
+    Vector3f direction = Normalize(centre - shadingPoint);
+    Normal3f normal = Normalize(shadingNormal);
+    if (distance > radius) {
+        if (Dot(direction, normal) >= 0) {
+            Float cosTheta = AbsDot(direction, normal);
+            Float cosPhi = sqrtf(1 - (radius * radius) / (distance * distance));
+            if (cosPhi < cosTheta) {
+                return 1.f;
+            } else {
+                return cosTheta * cosPhi +
+                       sqrtf(1 - cosTheta * cosTheta) * radius / distance;
+            }
+        } else {
+            Float cosTheta = Dot(direction, -normal);
+            Float cosPhi = sqrtf(1 - (radius * radius) / (distance * distance));
+            Float temp =
+                cosTheta * cosPhi + sqrtf(1 - cosTheta * cosTheta) * radius / distance;
+            if (temp > 0.f) {
+                return temp;
+            } else {
+                return 0.f;
+            }
+        }
+    } else {
+        return 1.f;
+    }
+}
+
+VPLTreeNodes VPLGradient::SampleTree(VPLTreeNodes *vplNode,
+                                       const SurfaceInteraction &intr, const BSDF *bsdf,
+                                       Float randomNumber, ScratchBuffer &scratchBuffer,
+                                       float &prob) {
+    if (vplNode->left == NULL && vplNode->right == NULL) {
+        return *vplNode;
+    } else if (vplNode->left == NULL || vplNode->right == NULL) {
+        if (vplNode->left == NULL) {
+            vplNode->right->prob = 1.f;
+            return SampleTree(vplNode->right, intr, bsdf, randomNumber, scratchBuffer,
+                              prob);
+        } else {
+            vplNode->left->prob = 1.f;
+            return SampleTree(vplNode->left, intr, bsdf, randomNumber, scratchBuffer,
+                              prob);
+        }
+    } else {
+        Float w1 = vplNode->right->I.Average();
+        Float w2 = vplNode->left->I.Average();
+
+        Float cosLeft, cosRight;
+        cosLeft = MaximumCosine(intr.p(), intr.n, vplNode->left->boundMin,
+                                vplNode->left->boundMax);
+        cosRight = MaximumCosine(intr.p(), intr.n, vplNode->right->boundMin,
+                                 vplNode->right->boundMax);
+        w1 *= cosRight;
+        w2 *= cosLeft;
+
+        Float dminLeft, dminRight;
+        dminLeft =
+            MinimumDistance(intr.p(), vplNode->left->boundMin, vplNode->left->boundMax);
+        dminRight =
+            MinimumDistance(intr.p(), vplNode->right->boundMin, vplNode->right->boundMax);
+        Float diagLeft = Distance(vplNode->left->boundMin, vplNode->left->boundMax);
+        Float diagRight = Distance(vplNode->right->boundMin, vplNode->right->boundMax);
+        Float alpha = 1.f;
+
+        if (dminLeft == 0.f || dminRight == 0.f) {
+            if (dminLeft == 0.f) {
+                dminLeft = 1.f;
+                vplNode->left->error = std::numeric_limits<Float>::max();
+            }
+            if (dminRight == 0.f) {
+                dminRight = 1.f;
+                vplNode->right->error = std::numeric_limits<Float>::max();
+            }
+        } else {
+            vplNode->left->error += w2 / (dminLeft * dminLeft);
+            vplNode->right->error += w1 / (dminRight * dminRight);
+        }
+
+        dminLeft = dminLeft > alpha * diagLeft ? dminLeft : 1.f;
+        dminRight = dminRight > alpha * diagRight ? dminRight : 1.f;
+
+        if (dminRight == 1.f || dminLeft == 1.f) {
+            dminLeft = 1.f;
+            dminRight = 1.f;
+        }
+
+        w1 = w1 / (dminRight * dminRight);
+        w2 = w2 / (dminLeft * dminLeft);
+
+        if (w1 + w2) {
+            float p = w1 / (w1 + w2);
+            vplNode->left->prob = (1 - p);
+            vplNode->right->prob = p;
+            if (randomNumber > p) {
+                vplNode->sampledLeft = true;
+                prob = prob * (1 - p);
+                return SampleTree(vplNode->left, intr, bsdf, (randomNumber - p) / (1 - p),
+                                  scratchBuffer, prob);
+            } else {
+                vplNode->sampledLeft = false;
+                prob = prob * p;
+                return SampleTree(vplNode->right, intr, bsdf, randomNumber / p,
+                                  scratchBuffer, prob);
+            }
+        } else {
+            vplNode->left->prob = 0.5f;
+            vplNode->right->prob = 0.5f;
+            return VPLTreeNodes(&VPLList[0], NULL, NULL, SampledSpectrum(0.f));
+        }
+    }
+}
+
+void VPLGradient::SampleTreeCuts(int cutSize, const SurfaceInteraction &intr,
+                                   const BSDF *bsdf, Sampler sampler,
+                                   ScratchBuffer &scratchBuffer,
+                                   std::vector<VPLTreeNodes> &samplePoints) {
+    float prob = 1.f;
+    samplePoints = {};
+    Float rn = sampler.Get1D();
+    VPL *sample =
+        SampleTree(&VPLTree[VPLTree.size() - 1][0], intr, bsdf, rn, scratchBuffer, prob)
+            .vpl;
+    VPLTreeNodes first = VPLTree[VPLTree.size() - 1][0];
+    first.vpl = sample;
+    first.prob = prob;
+    first.error = std::numeric_limits<Float>::max();
+    samplePoints.push_back(first);
+    while (samplePoints.size() < cutSize && samplePoints.size() < VPLList.size()) {
+        int size = samplePoints.size();
+        int i = 0;
+        for (int i = 0; i < size; i++) {
+            if (samplePoints[i].left == NULL && samplePoints[i].right == NULL)
+                continue;
+            else if (samplePoints[i].left == NULL) {
+                VPL *temp = samplePoints[i].vpl;
+                Float tempProb = samplePoints[i].prob;
+                samplePoints[i] = *samplePoints[i].right;
+                samplePoints[i].vpl = temp;
+                samplePoints[i].prob = tempProb;
+            } else if (samplePoints[i].right == NULL) {
+                VPL *temp = samplePoints[i].vpl;
+                Float tempProb = samplePoints[i].prob;
+                samplePoints[i] = *samplePoints[i].left;
+                samplePoints[i].vpl = temp;
+                samplePoints[i].prob = tempProb;
+            } else {
+                if (!samplePoints[i].sampledLeft) {
+                    prob = 1.f;
+                    Float rightProb = samplePoints[i].prob;
+                    Float p1 = samplePoints[i].right->prob;
+                    rn = sampler.Get1D();
+                    VPL *leftSample = SampleTree(samplePoints[i].left, intr, bsdf, rn,
+                                                 scratchBuffer, prob)
+                                          .vpl;
+                    VPL *rightSample = samplePoints[i].vpl;
+                    VPLTreeNodes temp = *samplePoints[i].left;
+                    temp.vpl = leftSample;
+                    temp.prob = prob;
+                    samplePoints.push_back(temp);
+                    samplePoints[i] = *samplePoints[i].right;
+                    samplePoints[i].vpl = rightSample;
+                    samplePoints[i].prob = rightProb / p1;
+                } else {
+                    prob = 1.f;
+                    Float leftProb = samplePoints[i].prob;
+                    Float p1 = samplePoints[i].left->prob;
+                    rn = sampler.Get1D();
+                    VPL *rightSample = SampleTree(samplePoints[i].right, intr, bsdf, rn,
+                                                  scratchBuffer, prob)
+                                           .vpl;
+                    VPL *leftSample = samplePoints[i].vpl;
+                    VPLTreeNodes temp = *samplePoints[i].right;
+                    temp.vpl = rightSample;
+                    temp.prob = prob;
+                    samplePoints.push_back(temp);
+                    samplePoints[i] = *samplePoints[i].left;
+                    samplePoints[i].vpl = leftSample;
+                    samplePoints[i].prob = leftProb / p1;
+                }
+            }
+            if (samplePoints.size() >= cutSize || samplePoints.size() >= VPLList.size())
+                break;
+            // std::sort(samplePoints.begin(), samplePoints.end(),
+            //           [](VPLTreeNodes a, VPLTreeNodes b) { return a.error > b.error;
+            //           });
+        }
+    }
+}
+
+void VPLGradient::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths &lambda,
+                                            Sampler sampler, ScratchBuffer &scratchBuffer,
+                                            VisibleSurface *,
+                                            Float randomStorage[]) {
+
+    // Estimate radiance along ray using simple path tracing
+    while (pRay.beta) {
+        // Find next _SimplePathIntegrator_ vertex and accumulate contribution
+        // Intersect _ray_ with scene
+        pstd::optional<ShapeIntersection> si = Intersect(pRay.ray);
+
+        // Account for infinite lights if ray has no intersection
+        if (!si) {
+            break;
+        }
+        //
+        //// Account for emissive surface if light was not sampled
+        SurfaceInteraction &isect = si->intr;
+
+        // End path if maximum depth reached
+        if (pRay.depth++ == 1)
+            break;
+
+        // Get BSDF and skip over medium boundaries
+        BSDF bsdf = isect.GetBSDF(pRay.ray, lambda, camera, scratchBuffer, sampler);
+        if (!bsdf) {
+            pRay.specularBounce = true;
+            isect.SkipIntersection(&pRay.ray, si->tHit);
+            pRay.depth--;
+            continue;
+        }
+
+        Vector3f wo = -pRay.ray.d;
+
+        // Sample outgoing direction at intersection to continue path
+        // Sample BSDF for new path direction
+        Float u = sampler.Get1D();
+        pstd::optional<BSDFSample> bs = bsdf.Sample_f(wo, u, sampler.Get2D());
+        if (!bs)
+            break;
+        pRay.specularBounce = bs->IsSpecular();
+        if (pRay.specularBounce) {
+            pRay.beta *= bs->f * AbsDot(bs->wi, isect.shading.n) / bs->pdf;
+            pRay.ray = isect.SpawnRay(bs->wi);
+            pRay.depth--;
+            continue;
+        }
+
+        // Sample direct illumination if _sampleLights_ is true
+        pRay.pathL[0] +=
+            pRay.beta * SampleVPLLd(isect, &bsdf, lambda, sampler, scratchBuffer);
+        break;
+    }
+    return;
+}
+
+void VPLGradient::ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &lambda,
+                                           Sampler sampler, ScratchBuffer &scratchBuffer,
+                                           VisibleSurface *, Float randomStorage[],
+                                           const PrimalRay &pRay) {
+    // Estimate radiance along ray using simple path tracing
+    while (sRay.beta) {
+        // Find next _SimplePathIntegrator_ vertex and accumulate contribution
+        // Intersect _ray_ with scene
+        pstd::optional<ShapeIntersection> si = Intersect(sRay.ray);
+
+        // Account for infinite lights if ray has no intersection
+        if (!si) {
+            break;
+        }
+        //
+        //// Account for emissive surface if light was not sampled
+        SurfaceInteraction &isect = si->intr;
+
+        // End path if maximum depth reached
+        if (sRay.depth++ == 1)
+            break;
+
+        // Get BSDF and skip over medium boundaries
+        BSDF bsdf = isect.GetBSDF(sRay.ray, lambda, camera, scratchBuffer, sampler);
+        if (!bsdf) {
+            sRay.specularBounce = true;
+            isect.SkipIntersection(&sRay.ray, si->tHit);
+            sRay.depth--;
+            continue;
+        }
+
+        Vector3f wo = -sRay.ray.d;
+
+        // Sample outgoing direction at intersection to continue path
+        // Sample BSDF for new path direction
+        Float u = sampler.Get1D();
+        pstd::optional<BSDFSample> bs = bsdf.Sample_f(wo, u, sampler.Get2D());
+        if (!bs)
+            break;
+        sRay.specularBounce = bs->IsSpecular();
+        if (sRay.specularBounce) {
+            sRay.beta *= bs->f * AbsDot(bs->wi, isect.shading.n) / bs->pdf;
+            sRay.ray = isect.SpawnRay(bs->wi);
+            sRay.depth--;
+            continue;
+        }
+
+        // Sample direct illumination if _sampleLights_ is true
+        sRay.pathL[0] +=
+            sRay.beta * SampleVPLLd(isect, &bsdf, lambda, sampler, scratchBuffer);
+        break;
+    }
+    return;
+}
+
+std::string VPLGradient::ToString() const {
+    return StringPrintf("[ VPLGradient maxDepth: %d]", maxDepth);
+}
+
+std::unique_ptr<VPLGradient> VPLGradient::Create(
+    const ParameterDictionary &parameters, Camera camera, Sampler sampler,
+    Primitive aggregate, std::vector<Light> lights, const FileLoc *loc) {
+    int maxDepth = parameters.GetOneInt("maxdepth", 5);
+    return std::make_unique<VPLGradient>(camera, sampler, aggregate, lights,
+                                                maxDepth);
 }
 
 
@@ -5284,6 +6177,9 @@ std::unique_ptr<Integrator> Integrator::Create(
     else if (name == "vplpath")
         integrator = VPLIntegrator::Create(parameters, camera, sampler, aggregate,
                                                 lights, loc);
+    else if (name == "vplgrad")
+        integrator =
+            VPLGradient::Create(parameters, camera, sampler, aggregate, lights, loc);
     else if (name == "lightpath")
         integrator = LightPathIntegrator::Create(parameters, camera, sampler, aggregate,
                                                   lights, loc);

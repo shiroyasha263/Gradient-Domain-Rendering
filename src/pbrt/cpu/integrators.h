@@ -104,6 +104,7 @@ struct VPLTreeNodes {
             boundMax = Point3f(0.f, 0.f, 0.f);
             boundMin = Point3f(0.f, 0.f, 0.f);
         }
+        error = 0.f;
     }
     VPL *vpl;
     VPLTreeNodes *left;
@@ -111,8 +112,9 @@ struct VPLTreeNodes {
     SampledSpectrum I;
     Point3f boundMin, boundMax;
     bool sampledLeft = true;
-    unsigned int count = 0;
+    unsigned int depth = 0;
     float prob = 1.f;
+    Float error;
 };
 
 // Integrator Definition
@@ -640,10 +642,8 @@ class VPLIntegrator : public Integrator {
 
     void VPLTreeGenerator();
 
-    void VPLTreeClear();
-
     VPLTreeNodes SampleTree(VPLTreeNodes *vplNode, const SurfaceInteraction &intr,
-                            const BSDF *bsdf, Sampler sampler,
+                            const BSDF *bsdf, Float randomNumber,
                             ScratchBuffer &scratchBuffer, float &prob);
 
     void SampleTreeCuts(int cutSize, const SurfaceInteraction &intr, const BSDF *bsdf,
@@ -667,6 +667,88 @@ class VPLIntegrator : public Integrator {
     int maxDepth;
     LightSampler lightSampler;
     bool regularize;
+    std::vector<VPL> VPLList;
+    std::vector<std::vector<VPLTreeNodes>> VPLTree;
+    std::vector<VPLTreeNodes> samplePoints;
+};
+
+class VPLGradient : public Integrator {
+  public:
+    VPLGradient(Camera camera, Sampler sampler, Primitive aggregate,
+                       std::vector<Light> lights, int maxDepth)
+        : Integrator(aggregate, lights),
+          camera(camera),
+          samplerPrototype(sampler),
+          maxDepth(maxDepth),
+          lightSampler(lights, Allocator()) {
+        Primal = std::vector<std::vector<SampledSpectrum>>(
+            camera.GetFilm().FullResolution().x,
+            std::vector<SampledSpectrum>(camera.GetFilm().FullResolution().y,
+                                         SampledSpectrum(0.f)));
+        Temp = std::vector<std::vector<SampledSpectrum>>(
+            camera.GetFilm().FullResolution().x,
+            std::vector<SampledSpectrum>(camera.GetFilm().FullResolution().y,
+                                         SampledSpectrum(0.f)));
+        xGrad = std::vector<std::vector<SampledSpectrum>>(
+            camera.GetFilm().FullResolution().x + 1,
+            std::vector<SampledSpectrum>(camera.GetFilm().FullResolution().y,
+                                         SampledSpectrum(0.f)));
+        yGrad = std::vector<std::vector<SampledSpectrum>>(
+            camera.GetFilm().FullResolution().x,
+            std::vector<SampledSpectrum>(camera.GetFilm().FullResolution().y + 1,
+                                         SampledSpectrum(0.f)));
+
+        VPLList = {};
+        VPLTree = {};
+        samplePoints = {};
+    }
+
+    static std::unique_ptr<VPLGradient> Create(
+        const ParameterDictionary &parameters, Camera camera, Sampler sampler,
+        Primitive aggregate, std::vector<Light> lights, const FileLoc *loc);
+
+    std::string ToString() const;
+
+    void Render();
+
+    void GradEvaluatePixelSample(Point2i pPixel, int sampleIndex, Sampler sampler,
+                                 ScratchBuffer &scratchBuffer);
+
+    void PixelSampleVPLGenerator(int maxVPL, Sampler sampler,
+                                 ScratchBuffer &scratchBuffer);
+
+    void VPLTreeGenerator();
+
+    VPLTreeNodes SampleTree(VPLTreeNodes *vplNode, const SurfaceInteraction &intr,
+                            const BSDF *bsdf, Float randomNumber,
+                            ScratchBuffer &scratchBuffer, float &prob);
+
+    void SampleTreeCuts(int cutSize, const SurfaceInteraction &intr, const BSDF *bsdf,
+                        Sampler sampler, ScratchBuffer &scratchBuffer,
+                        std::vector<VPLTreeNodes> &samplePoints);
+
+    void PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths &lambda, Sampler sampler,
+                            ScratchBuffer &scratchBuffer, VisibleSurface *,
+                            Float randomStorage[]);
+    void ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &lambda, Sampler sampler,
+                           ScratchBuffer &scratchBuffer, VisibleSurface *,
+                           Float randomStorage[], const PrimalRay &pRay);
+
+    SampledSpectrum SampleVPLLd(const SurfaceInteraction &intr, const BSDF *bsdf,
+                                SampledWavelengths &lambda, Sampler sampler,
+                                ScratchBuffer &scratchBuffer);
+
+    Float MinimumDistance(Point3f sample, Point3f BBMin, Point3f BBMax);
+
+    Float MaximumCosine(Point3f shadingPoint, Normal3f shadingNormal, Point3f BBMin,
+                        Point3f BBMax);
+
+  private:
+    Camera camera;
+    Sampler samplerPrototype;
+    int maxDepth;
+    UniformLightSampler lightSampler;
+    std::vector<std::vector<SampledSpectrum>> Primal, xGrad, yGrad, Temp;
     std::vector<VPL> VPLList;
     std::vector<std::vector<VPLTreeNodes>> VPLTree;
     std::vector<VPLTreeNodes> samplePoints;
