@@ -1363,7 +1363,6 @@ VPLIntegrator::VPLIntegrator(int maxDepth, Camera camera, Sampler sampler,
       regularize(regularize) {
     VPLList = {};
     VPLTree = {};
-    samplePoints = {};
 }
 
 void VPLIntegrator::Render() {
@@ -1472,7 +1471,7 @@ void VPLIntegrator::Render() {
     {
         ScratchBuffer &scratchBuffer = scratchBuffers.Get();
         Sampler &sampler = samplers.Get();
-        int maxVPL = 1000000;
+        int maxVPL = 100000;
         for (int i = 0; i < maxVPL; i++) {
             PixelSampleVPLGenerator(maxVPL, sampler, scratchBuffer);
         }
@@ -1787,11 +1786,11 @@ SampledSpectrum VPLIntegrator::SampleVPLLd(const SurfaceInteraction &intr, const
     int index = sampler.Get1D() * VPLList.size();
     float prob = 1.f;
     //VPLTreeNodes sampleleaf = SampleTree(&VPLTree[VPLTree.size() - 1][0], intr, bsdf, sampler, scratchBuffer, prob);
-    std::vector<VPLTreeNodes> samplePoints = {};
-    int cutSize = 32;
-    SampleTreeCuts(cutSize, intr, bsdf, sampler, scratchBuffer, samplePoints);
-    for (int i = 0; i < samplePoints.size(); i++) {
-        VPL sampleVPL = *samplePoints[i].vpl;
+    std::vector<CutNodes> cutNodes = {};
+    int cutSize = 10;
+    SampleCuts(cutSize, intr, bsdf, sampler, scratchBuffer, cutNodes);
+    for (int i = 0; i < cutNodes.size(); i++) {
+        VPL sampleVPL = *cutNodes[i].vpl;
         BSDF vplBSDF = sampleVPL.isect.GetBSDF(sampleVPL.ray, sampleVPL.lambda, camera,
                                                scratchBuffer, sampler);
 
@@ -1808,7 +1807,7 @@ SampledSpectrum VPLIntegrator::SampleVPLLd(const SurfaceInteraction &intr, const
             continue;
         else {
             sampledLd +=
-                sampleVPL.I * f * fL / (distance * distance * samplePoints[i].prob);
+                sampleVPL.I * f * fL / (distance * distance * cutNodes[i].prob);
         }
     }
     return sampledLd;
@@ -1854,28 +1853,30 @@ void VPLIntegrator::VPLTreeGenerator() {
     VPLTree.push_back(leaves);
     int k = 0;
     while (VPLTree[k].size() > 1) {
-        std::vector<VPLTreeNodes> nodes = {};
+        VPLTree.push_back({});
         for (int i = 0; i < VPLTree[k].size(); i += 2) {
-            SampledSpectrum temp =
-                VPLTree[k][i].I +
-                (i + 1 < VPLTree[k].size() ? VPLTree[k][i + 1].I : SampledSpectrum(0.f));
-            VPLTreeNodes node(NULL, &VPLTree[k][i],
-                         i + 1 < VPLTree[k].size() ? &VPLTree[k][i + 1] : NULL, temp);
-            if (node.right == NULL) {
-                node.boundMin = node.left->boundMin;
-                node.boundMax = node.left->boundMax;
-            } else {
+            if (i + 1 < VPLTree[k].size()) {
+                VPLTreeNodes node(NULL, &VPLTree[k][i], &VPLTree[k][i + 1],
+                             VPLTree[k][i].I + VPLTree[k][i + 1].I);
                 node.boundMin.x = std::min(node.left->boundMin.x, node.right->boundMin.x);
                 node.boundMin.y = std::min(node.left->boundMin.y, node.right->boundMin.y);
                 node.boundMin.z = std::min(node.left->boundMin.z, node.right->boundMin.z);
                 node.boundMax.x = std::max(node.left->boundMax.x, node.right->boundMax.x);
                 node.boundMax.y = std::max(node.left->boundMax.y, node.right->boundMax.y);
                 node.boundMax.z = std::max(node.left->boundMax.z, node.right->boundMax.z);
-            }
                 node.depth = node.left->depth + 1;
-            nodes.push_back(node);
+                VPLTree[k + 1].push_back(node);
+                VPLTree[k][i].parent = &VPLTree[k + 1][i / 2];
+                VPLTree[k][i + 1].parent = &VPLTree[k + 1][i / 2];
+            } else {
+                VPLTreeNodes node(NULL, &VPLTree[k][i], NULL, VPLTree[k][i].I);
+                node.boundMin = node.left->boundMin;
+                node.boundMax = node.left->boundMax;
+                node.depth = node.left->depth + 1;
+                VPLTree[k + 1].push_back(node);
+                VPLTree[k][i].parent = &VPLTree[k + 1][i / 2];
+            }
         }
-        VPLTree.push_back(nodes);
         k = VPLTree.size() - 1;
     }
 }
@@ -2039,76 +2040,75 @@ VPLTreeNodes VPLIntegrator::SampleTree(VPLTreeNodes *vplNode,
     }
 }
 
-void VPLIntegrator::SampleTreeCuts(int cutSize, const SurfaceInteraction &intr,
-                                   const BSDF *bsdf, Sampler sampler,
-                                   ScratchBuffer &scratchBuffer, std::vector<VPLTreeNodes> &samplePoints) {
-    float prob = 1.f;
-    samplePoints = {};
-    Float rn = sampler.Get1D();
-    VPL *sample = SampleTree(&VPLTree[VPLTree.size() - 1][0], intr, bsdf, rn,
-                                     scratchBuffer, prob).vpl;
-    VPLTreeNodes first = VPLTree[VPLTree.size() - 1][0];
-    first.vpl = sample;
-    first.prob = prob;
-    first.error = std::numeric_limits<Float>::max();
-    samplePoints.push_back(first);
-    while (samplePoints.size() < cutSize && samplePoints.size() < VPLList.size()) {
-        int size = samplePoints.size();
+Float VPLIntegrator::NodeError(Point3f shadingPoint, Normal3f shadingNormal, Point3f BBMin,
+                             Point3f BBMax) {
+    Float w1 = 1.f;
+    Float cosMax;
+    cosMax = MaximumCosine(shadingPoint, shadingNormal, BBMin, BBMax);
+    w1 *= cosMax;
+
+    Float dmin;
+    dmin = MinimumDistance(shadingPoint, BBMin, BBMax);
+
+    if (dmin == 0.f) {
+        w1 = std::numeric_limits<Float>::max();
+    } else {
+        w1 = w1 / (dmin * dmin);
+    }
+
+    return w1;
+}
+
+void VPLIntegrator::GenerateCuts(int cutSize, const SurfaceInteraction &intr,
+                               std::vector<CutNodes> &cutNodes) {
+    cutNodes = {};
+    cutNodes.push_back(CutNodes(&VPLTree[VPLTree.size() - 1][0], NULL,
+                                std::numeric_limits<Float>::max()));
+    while (cutNodes.size() < cutSize && cutNodes.size() < VPLList.size()) {
         int i = 0;
-        for (int i = 0; i < size; i++) {
-            if (samplePoints[i].left == NULL && samplePoints[i].right == NULL)
-                continue;
-            else if (samplePoints[i].left == NULL) {
-                VPL *temp = samplePoints[i].vpl;
-                Float tempProb = samplePoints[i].prob;
-                samplePoints[i] = *samplePoints[i].right;
-                samplePoints[i].vpl = temp;
-                samplePoints[i].prob = tempProb;
-            } else if (samplePoints[i].right == NULL) {
-                VPL *temp = samplePoints[i].vpl;
-                Float tempProb = samplePoints[i].prob;
-                samplePoints[i] = *samplePoints[i].left;
-                samplePoints[i].vpl = temp;
-                samplePoints[i].prob = tempProb;
-            } else {
-                if (!samplePoints[i].sampledLeft) {
-                    prob = 1.f;
-                    Float rightProb = samplePoints[i].prob;
-                    Float p1 = samplePoints[i].right->prob;
-                    rn = sampler.Get1D();
-                    VPL *leftSample = SampleTree(samplePoints[i].left, intr, bsdf,
-                                                   rn, scratchBuffer, prob).vpl;
-                    VPL *rightSample = samplePoints[i].vpl;
-                    VPLTreeNodes temp = *samplePoints[i].left;
-                    temp.vpl = leftSample;
-                    temp.prob = prob;
-                    samplePoints.push_back(temp);
-                    samplePoints[i] = *samplePoints[i].right;
-                    samplePoints[i].vpl = rightSample;
-                    samplePoints[i].prob = rightProb / p1;
-                } else {
-                    prob =1.f;
-                    Float leftProb = samplePoints[i].prob;
-                    Float p1 = samplePoints[i].left->prob;
-                    rn = sampler.Get1D();
-                    VPL *rightSample = SampleTree(samplePoints[i].right, intr, bsdf,
-                                                   rn, scratchBuffer, prob).vpl;
-                    VPL *leftSample = samplePoints[i].vpl;
-                    VPLTreeNodes temp = *samplePoints[i].right;
-                    temp.vpl = rightSample;
-                    temp.prob = prob;
-                    samplePoints.push_back(temp);
-                    samplePoints[i] = *samplePoints[i].left;
-                    samplePoints[i].vpl = leftSample;
-                    samplePoints[i].prob = leftProb / p1;
-                }
-            }
-            if (samplePoints.size() >= cutSize ||
-                samplePoints.size() >= VPLList.size())
-                break;
-            //std::sort(samplePoints.begin(), samplePoints.end(),
-            //          [](VPLTreeNodes a, VPLTreeNodes b) { return a.error > b.error; });
+        if (cutNodes[i].TreeNode->left == NULL && cutNodes[i].TreeNode->right == NULL)
+            continue;
+        else if (cutNodes[i].TreeNode->left == NULL) {
+            cutNodes[i] = CutNodes(
+                cutNodes[i].TreeNode->right, cutNodes[i].TreeNode->right->vpl,
+                NodeError(intr.p(), intr.n, cutNodes[i].TreeNode->right->boundMin,
+                          cutNodes[i].TreeNode->right->boundMax));
+        } else if (cutNodes[i].TreeNode->right == NULL) {
+            cutNodes[i] =
+                CutNodes(cutNodes[i].TreeNode->left, cutNodes[i].TreeNode->left->vpl,
+                         NodeError(intr.p(), intr.n, cutNodes[i].TreeNode->left->boundMin,
+                                   cutNodes[i].TreeNode->left->boundMax));
+        } else {
+            cutNodes.push_back(CutNodes(
+                cutNodes[i].TreeNode->right, cutNodes[i].TreeNode->right->vpl,
+                NodeError(intr.p(), intr.n, cutNodes[i].TreeNode->right->boundMin,
+                          cutNodes[i].TreeNode->right->boundMax)));
+            cutNodes[i] =
+                CutNodes(cutNodes[i].TreeNode->left, cutNodes[i].TreeNode->left->vpl,
+                         NodeError(intr.p(), intr.n, cutNodes[i].TreeNode->left->boundMin,
+                                   cutNodes[i].TreeNode->left->boundMax));
         }
+        if (cutNodes.size() >= cutSize || cutNodes.size() >= VPLList.size())
+            break;
+        std::sort(cutNodes.begin(), cutNodes.end(), [](CutNodes a, CutNodes b) {
+            return a.TreeNode->depth > b.TreeNode->depth;
+        });
+    }
+}
+
+void VPLIntegrator::SampleCuts(int cutSize, const SurfaceInteraction &intr,
+                             const BSDF *bsdf, Sampler sampler,
+                             ScratchBuffer &scratchBuffer,
+                             std::vector<CutNodes> &cutNodes) {
+    cutNodes = {};
+    GenerateCuts(cutSize, intr, cutNodes);
+
+    for (int i = 0; i < cutNodes.size(); i++) {
+        Float rn = sampler.Get1D();
+        float prob = 1.f;
+        cutNodes[i].vpl =
+            SampleTree(cutNodes[i].TreeNode, intr, bsdf, rn, scratchBuffer, prob).vpl;
+        cutNodes[i].prob = prob;
     }
 }
 
@@ -2422,31 +2422,20 @@ void VPLGradient::GradEvaluatePixelSample(Point2i pPixel, int sampleIndex,
         bool initializeVisibleSurface = camera.GetFilm().UsesVisibleSurface();
         //bool live = true;
         //while (live) {
-            Float randomStorage[6];
+        std::vector<CutNodes> cutNodes = {};
 
-            //--------------------------------------Primal -
-            //Implementation---------------------------------------//
-            sampler.Clear();
-            PrimalRayPropogate(pRay, lambda, sampler, scratchBuffer,
-                               initializeVisibleSurface ? &visibleSurface : nullptr,
-                               randomStorage);
-            //live = pRay.live;
-            //--------------------------------------Primal -
-            //End---------------------------------------//
+        PrimalRayPropogate(pRay, lambda, sampler, scratchBuffer,
+                           initializeVisibleSurface ? &visibleSurface : nullptr,
+                           cutNodes);
 
-            //--------------------------------------Shift -
-            //Implementation---------------------------------------//
+        for (int i = 0; i < 4; i++) {
+            ShiftRayPropogate(sRay[i], lambda, sampler, scratchBuffer,
+                              initializeVisibleSurface ? &visibleSurface : nullptr,
+                              cutNodes, pRay);
+        }
 
-            for (int i = 0; i < 4; i++) {
-                sampler.Clear();
-                ShiftRayPropogate(sRay[i], lambda, sampler, scratchBuffer,
-                                  initializeVisibleSurface ? &visibleSurface : nullptr,
-                                  randomStorage, pRay);
-                //live = live || sRay[i].live;
-            }
-
-            //--------------------------------------Shift -
-            //End---------------------------------------//
+        //--------------------------------------Shift -
+        //End---------------------------------------//
         //}
 
         // Issue warning if unexpected radiance value is returned
@@ -2577,14 +2566,14 @@ void VPLGradient::PixelSampleVPLGenerator(int maxVPL, Sampler sampler,
 SampledSpectrum VPLGradient::SampleVPLLd(const SurfaceInteraction &intr,
                                            const BSDF *bsdf, SampledWavelengths &lambda,
                                            Sampler sampler,
-                                           ScratchBuffer &scratchBuffer) {
+                                           ScratchBuffer &scratchBuffer, std::vector<CutNodes> &cutNodes) {
     // Choose a light source for the direct lighting calculation
     SampledSpectrum sampledLd(0.f);
-    std::vector<VPLTreeNodes> samplePoints = {};
     int cutSize = 10;
-    SampleTreeCuts(cutSize, intr, bsdf, sampler, scratchBuffer, samplePoints);
-    for (int i = 0; i < samplePoints.size(); i++) {
-        VPL sampleVPL = *samplePoints[i].vpl;
+    GenerateCuts(cutSize, intr, cutNodes);
+    SampleCuts(cutSize, intr, bsdf, sampler, scratchBuffer, cutNodes);
+    for (int i = 0; i < cutNodes.size(); i++) {
+        VPL sampleVPL = *cutNodes[i].vpl;
         BSDF vplBSDF = sampleVPL.isect.GetBSDF(sampleVPL.ray, sampleVPL.lambda, camera,
                                                scratchBuffer, sampler);
 
@@ -2597,15 +2586,47 @@ SampledSpectrum VPLGradient::SampleVPLLd(const SurfaceInteraction &intr,
         SampledSpectrum f = bsdf->f(wo, wi) * AbsDot(wi, intr.shading.n);
         SampledSpectrum fL =
             vplBSDF.f(-sampleVPL.isect.wo, wi) * AbsDot(wi, sampleVPL.isect.shading.n);
-        if (!f || !Unoccluded(intr, sampleVPL.isect))
+        if (!f || !Unoccluded(intr, sampleVPL.isect) || cutNodes[i].prob == 0.f)
             continue;
         else {
             sampledLd +=
-                sampleVPL.I * f * fL / (distance * distance * samplePoints[i].prob);
+                sampleVPL.I * f * fL / (distance * distance * cutNodes[i].prob);
         }
     }
     return sampledLd;
 }
+
+SampledSpectrum VPLGradient::SampleVPLLdShifted(const SurfaceInteraction& intr,
+                                            const BSDF* bsdf, SampledWavelengths& lambda,
+                                            Sampler sampler, ScratchBuffer& scratchBuffer,
+                                            std::vector<CutNodes>& cutNodes) {
+    // Choose a light source for the direct lighting calculation
+    SampledSpectrum sampledLd(0.f);
+    int cutSize = 10;
+    SampleShiftedCuts(cutSize, intr, bsdf, sampler, scratchBuffer, cutNodes);
+    for (int i = 0; i < cutNodes.size(); i++) {
+        VPL sampleVPL = *cutNodes[i].vpl;
+        BSDF vplBSDF = sampleVPL.isect.GetBSDF(sampleVPL.ray, sampleVPL.lambda, camera,
+                                               scratchBuffer, sampler);
+
+        if (!sampleVPL.I || !vplBSDF)
+            continue;
+
+        // Evaluate BSDF for light sample and check light visibility
+        Vector3f wo = intr.wo, wi = Normalize(sampleVPL.point - intr.p());
+        Float distance = Length(sampleVPL.point - intr.p());
+        SampledSpectrum f = bsdf->f(wo, wi) * AbsDot(wi, intr.shading.n);
+        SampledSpectrum fL =
+            vplBSDF.f(-sampleVPL.isect.wo, wi) * AbsDot(wi, sampleVPL.isect.shading.n);
+        if (!f || !Unoccluded(intr, sampleVPL.isect) || cutNodes[i].prob == 0.f)
+            continue;
+        else {
+            sampledLd += sampleVPL.I * f * fL / (distance * distance * cutNodes[i].prob);
+        }
+    }
+    return sampledLd;
+}
+
 
 void VPLGradient::VPLTreeGenerator() {
     // Sorting
@@ -2644,29 +2665,30 @@ void VPLGradient::VPLTreeGenerator() {
     VPLTree.push_back(leaves);
     int k = 0;
     while (VPLTree[k].size() > 1) {
-        std::vector<VPLTreeNodes> nodes = {};
+        VPLTree.push_back({});
         for (int i = 0; i < VPLTree[k].size(); i += 2) {
-            SampledSpectrum temp =
-                VPLTree[k][i].I +
-                (i + 1 < VPLTree[k].size() ? VPLTree[k][i + 1].I : SampledSpectrum(0.f));
-            VPLTreeNodes node(NULL, &VPLTree[k][i],
-                              i + 1 < VPLTree[k].size() ? &VPLTree[k][i + 1] : NULL,
-                              temp);
-            if (node.right == NULL) {
-                node.boundMin = node.left->boundMin;
-                node.boundMax = node.left->boundMax;
-            } else {
+            if (i + 1 < VPLTree[k].size()) {
+                VPLTreeNodes node(NULL, &VPLTree[k][i], &VPLTree[k][i + 1],
+                                  VPLTree[k][i].I + VPLTree[k][i + 1].I);
                 node.boundMin.x = std::min(node.left->boundMin.x, node.right->boundMin.x);
                 node.boundMin.y = std::min(node.left->boundMin.y, node.right->boundMin.y);
                 node.boundMin.z = std::min(node.left->boundMin.z, node.right->boundMin.z);
                 node.boundMax.x = std::max(node.left->boundMax.x, node.right->boundMax.x);
                 node.boundMax.y = std::max(node.left->boundMax.y, node.right->boundMax.y);
                 node.boundMax.z = std::max(node.left->boundMax.z, node.right->boundMax.z);
+                node.depth = node.left->depth + 1;
+                VPLTree[k + 1].push_back(node);
+                VPLTree[k][i].parent = &VPLTree[k + 1][i / 2];
+                VPLTree[k][i + 1].parent = &VPLTree[k + 1][i / 2];
+            } else {
+                VPLTreeNodes node(NULL, &VPLTree[k][i], NULL, VPLTree[k][i].I);
+                node.boundMin = node.left->boundMin;
+                node.boundMax = node.left->boundMax;
+                node.depth = node.left->depth + 1;
+                VPLTree[k + 1].push_back(node);
+                VPLTree[k][i].parent = &VPLTree[k + 1][i / 2];
             }
-            node.depth = node.left->depth + 1;
-            nodes.push_back(node);
         }
-        VPLTree.push_back(nodes);
         k = VPLTree.size() - 1;
     }
 }
@@ -2779,17 +2801,8 @@ VPLTreeNodes VPLGradient::SampleTree(VPLTreeNodes *vplNode,
         Float alpha = 1.f;
 
         if (dminLeft == 0.f || dminRight == 0.f) {
-            if (dminLeft == 0.f) {
-                dminLeft = 1.f;
-                vplNode->left->error = std::numeric_limits<Float>::max();
-            }
-            if (dminRight == 0.f) {
-                dminRight = 1.f;
-                vplNode->right->error = std::numeric_limits<Float>::max();
-            }
-        } else {
-            vplNode->left->error += w2 / (dminLeft * dminLeft);
-            vplNode->right->error += w1 / (dminRight * dminRight);
+            dminLeft = 1.f;
+            dminRight = 1.f;
         }
 
         dminLeft = dminLeft > alpha * diagLeft ? dminLeft : 1.f;
@@ -2824,6 +2837,26 @@ VPLTreeNodes VPLGradient::SampleTree(VPLTreeNodes *vplNode,
             return VPLTreeNodes(&VPLList[0], NULL, NULL, SampledSpectrum(0.f));
         }
     }
+}
+
+Float VPLGradient::NodeError(Point3f shadingPoint, Normal3f shadingNormal, Point3f BBMin,
+    Point3f BBMax) {
+    
+    Float w1 = 1.f;
+    Float cosMax;
+    cosMax = MaximumCosine(shadingPoint, shadingNormal, BBMin, BBMax);
+    w1 *= cosMax;
+
+    Float dmin;
+    dmin = MinimumDistance(shadingPoint, BBMin, BBMax);
+
+    if (dmin == 0.f) {
+        w1 = std::numeric_limits<Float>::max();
+    } else {
+        w1 = w1 / (dmin * dmin);
+    }
+
+    return w1;
 }
 
 void VPLGradient::SampleTreeCuts(int cutSize, const SurfaceInteraction &intr,
@@ -2903,10 +2936,136 @@ void VPLGradient::SampleTreeCuts(int cutSize, const SurfaceInteraction &intr,
     }
 }
 
+void VPLGradient::GenerateCuts(int cutSize, const SurfaceInteraction &intr,
+                                 std::vector<CutNodes> &cutNodes) {
+    cutNodes = {};
+    cutNodes.push_back(CutNodes(&VPLTree[VPLTree.size() - 1][0], NULL, std::numeric_limits<Float>::max()));
+    while (cutNodes.size() < cutSize && cutNodes.size() < VPLList.size()) {
+        int i = 0;
+        if (cutNodes[i].TreeNode->left == NULL && cutNodes[i].TreeNode->right == NULL)
+            continue;
+        else if (cutNodes[i].TreeNode->left == NULL) {
+            cutNodes[i] = CutNodes(
+                cutNodes[i].TreeNode->right, cutNodes[i].TreeNode->right->vpl,
+                NodeError(intr.p(), intr.n, cutNodes[i].TreeNode->right->boundMin,
+                          cutNodes[i].TreeNode->right->boundMax));
+        } else if (cutNodes[i].TreeNode->right == NULL) {
+            cutNodes[i] = CutNodes(
+                cutNodes[i].TreeNode->left, cutNodes[i].TreeNode->left->vpl,
+                NodeError(intr.p(), intr.n, cutNodes[i].TreeNode->left->boundMin,
+                          cutNodes[i].TreeNode->left->boundMax));
+        } else {
+            cutNodes.push_back(CutNodes(
+                cutNodes[i].TreeNode->right, cutNodes[i].TreeNode->right->vpl,
+                NodeError(intr.p(), intr.n, cutNodes[i].TreeNode->right->boundMin,
+                          cutNodes[i].TreeNode->right->boundMax)));
+            cutNodes[i] = CutNodes(
+                cutNodes[i].TreeNode->left, cutNodes[i].TreeNode->left->vpl,
+                NodeError(intr.p(), intr.n, cutNodes[i].TreeNode->left->boundMin,
+                          cutNodes[i].TreeNode->left->boundMax));
+        }
+        if (cutNodes.size() >= cutSize || cutNodes.size() >= VPLList.size())
+            break;
+         std::sort(cutNodes.begin(), cutNodes.end(),
+                   [](CutNodes a, CutNodes b) { return a.TreeNode->depth > b.TreeNode->depth;
+                   });
+    }
+}
+
+void VPLGradient::SampleCuts(int cutSize, const SurfaceInteraction &intr,
+                               const BSDF *bsdf, Sampler sampler,
+                               ScratchBuffer &scratchBuffer,
+                               std::vector<CutNodes> &cutNodes) {
+    for (int i = 0; i < cutNodes.size(); i++) {
+         Float rn = sampler.Get1D();
+         float prob = 1.f;
+         cutNodes[i].vpl =
+             SampleTree(cutNodes[i].TreeNode, intr, bsdf, rn, scratchBuffer, prob).vpl;
+         cutNodes[i].prob = prob;
+    }
+}
+
+void VPLGradient::SampleShiftedCuts(int cutSize, const SurfaceInteraction& intr,
+                                const BSDF* bsdf, Sampler sampler,
+                                ScratchBuffer& scratchBuffer,
+                                std::vector<CutNodes>& cutNodes) {
+    
+    for (int i = 0; i < cutNodes.size(); i++) {
+        VPLTreeNodes temp = *cutNodes[i].TreeNode;
+        Float prob = 1.f;
+        while (temp.left == NULL && temp.right == NULL) {
+            if (temp.left == NULL && temp.right == NULL) {
+                break;
+            } else if (temp.left == NULL || temp.right == NULL) {
+                if (temp.left == NULL) {
+                    temp = *temp.right;
+                } else {
+                    temp = *temp.left;
+                }
+            } else {
+                Float w1 = temp.right->I.Average();
+                Float w2 = temp.left->I.Average();
+
+                Float cosLeft, cosRight;
+                cosLeft = MaximumCosine(intr.p(), intr.n, temp.left->boundMin,
+                                        temp.left->boundMax);
+                cosRight = MaximumCosine(intr.p(), intr.n, temp.right->boundMin,
+                                         temp.right->boundMax);
+                w1 *= cosRight;
+                w2 *= cosLeft;
+
+                Float dminLeft, dminRight;
+                dminLeft = MinimumDistance(intr.p(), temp.left->boundMin,
+                                           temp.left->boundMax);
+                dminRight = MinimumDistance(intr.p(), temp.right->boundMin,
+                                            temp.right->boundMax);
+                Float diagLeft =
+                    Distance(temp.left->boundMin, temp.left->boundMax);
+                Float diagRight =
+                    Distance(temp.right->boundMin, temp.right->boundMax);
+                Float alpha = 1.f;
+
+                if (dminLeft == 0.f || dminRight == 0.f) {
+                    dminLeft = 1.f;
+                    dminRight = 1.f;
+                }
+
+                dminLeft = dminLeft > alpha * diagLeft ? dminLeft : 1.f;
+                dminRight = dminRight > alpha * diagRight ? dminRight : 1.f;
+
+                if (dminRight == 1.f || dminLeft == 1.f) {
+                    dminLeft = 1.f;
+                    dminRight = 1.f;
+                }
+
+                w1 = w1 / (dminRight * dminRight);
+                w2 = w2 / (dminLeft * dminLeft);
+
+                if (w1 + w2) {
+                    float p = w1 / (w1 + w2);
+                    if (temp.sampledLeft) {
+                        prob = prob * (1 - p);
+                        temp = *temp.left;
+                    } else {
+                        prob = prob * p;
+                        temp = *temp.right;
+                    }
+                } else {
+                    prob = 0.f;
+                }
+
+                if (prob == 0.f)
+                    break;
+            }
+        }
+        cutNodes[i].prob = prob;
+    }
+}
+
 void VPLGradient::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths &lambda,
                                             Sampler sampler, ScratchBuffer &scratchBuffer,
                                             VisibleSurface *,
-                                            Float randomStorage[]) {
+                                            std::vector<CutNodes> &cutNodes) {
 
     // Estimate radiance along ray using simple path tracing
     while (pRay.beta) {
@@ -2953,7 +3112,7 @@ void VPLGradient::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths &lambda
 
         // Sample direct illumination if _sampleLights_ is true
         pRay.pathL[0] +=
-            pRay.beta * SampleVPLLd(isect, &bsdf, lambda, sampler, scratchBuffer);
+            pRay.beta * SampleVPLLd(isect, &bsdf, lambda, sampler, scratchBuffer, cutNodes);
         break;
     }
     return;
@@ -2961,7 +3120,7 @@ void VPLGradient::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths &lambda
 
 void VPLGradient::ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &lambda,
                                            Sampler sampler, ScratchBuffer &scratchBuffer,
-                                           VisibleSurface *, Float randomStorage[],
+                                    VisibleSurface *, std::vector<CutNodes> &cutNodes,
                                            const PrimalRay &pRay) {
     // Estimate radiance along ray using simple path tracing
     while (sRay.beta) {
@@ -3008,7 +3167,7 @@ void VPLGradient::ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &lambda,
 
         // Sample direct illumination if _sampleLights_ is true
         sRay.pathL[0] +=
-            sRay.beta * SampleVPLLd(isect, &bsdf, lambda, sampler, scratchBuffer);
+            sRay.beta * SampleVPLLdShifted(isect, &bsdf, lambda, sampler, scratchBuffer, cutNodes);
         break;
     }
     return;

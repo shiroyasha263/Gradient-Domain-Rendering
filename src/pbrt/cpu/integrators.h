@@ -94,8 +94,19 @@ struct VPL {
 };
 
 struct VPLTreeNodes {
-    VPLTreeNodes(VPL *vpl, VPLTreeNodes *left, VPLTreeNodes *right, SampledSpectrum I)
-    :vpl(vpl), left(left), right(right), I(I){
+    VPLTreeNodes(){
+        vpl = NULL;
+        left = NULL;
+        right = NULL;
+        parent = NULL;
+        I = SampledSpectrum(0.f);
+        prob = 1.f;
+        error = 0.f;
+        boundMax = Point3f(0.f, 0.f, 0.f);
+        boundMin = Point3f(0.f, 0.f, 0.f);
+    }
+    VPLTreeNodes(VPL *vpl, VPLTreeNodes *left, VPLTreeNodes *right, SampledSpectrum I, VPLTreeNodes *parent = NULL)
+    :vpl(vpl), left(left), right(right), I(I), parent(parent){
         prob = 0.f;
         if (vpl != NULL) {
             boundMin = vpl->point;
@@ -115,6 +126,20 @@ struct VPLTreeNodes {
     unsigned int depth = 0;
     float prob = 1.f;
     Float error;
+    VPLTreeNodes *parent;
+};
+
+struct CutNodes {
+    CutNodes(){
+        TreeNode = NULL;
+        vpl = NULL;
+    }
+    CutNodes(VPLTreeNodes *TreeNode = NULL, VPL *vpl = NULL, Float error = 0.f, Float prob = 1.f)
+    :TreeNode(TreeNode), vpl(vpl), error(prob), prob(error) {}
+    VPLTreeNodes *TreeNode;
+    VPL *vpl;
+    Float error = 0.f;
+    Float prob = 1.f;
 };
 
 // Integrator Definition
@@ -646,12 +671,19 @@ class VPLIntegrator : public Integrator {
                             const BSDF *bsdf, Float randomNumber,
                             ScratchBuffer &scratchBuffer, float &prob);
 
-    void SampleTreeCuts(int cutSize, const SurfaceInteraction &intr, const BSDF *bsdf,
-                        Sampler sampler, ScratchBuffer &scratchBuffer, std::vector<VPLTreeNodes> &samplePoints);
-
     SampledSpectrum Li(RayDifferential ray, SampledWavelengths &lambda, Sampler sampler,
                        ScratchBuffer &scratchBuffer,
                        VisibleSurface *visibleSurface);
+
+    Float NodeError(Point3f shadingPoint, Normal3f shadingNormal, Point3f BBMin,
+                    Point3f BBMax);
+
+    void GenerateCuts(int cutSize, const SurfaceInteraction &intr,
+                 std::vector<CutNodes> &cutNodes);
+
+    void SampleCuts(int cutSize, const SurfaceInteraction &intr, const BSDF *bsdf,
+                    Sampler sampler, ScratchBuffer &scratchBuffer,
+                    std::vector<CutNodes> &cutNodes);
 
   private:
     // PathIntegrator Private Methods
@@ -669,7 +701,6 @@ class VPLIntegrator : public Integrator {
     bool regularize;
     std::vector<VPL> VPLList;
     std::vector<std::vector<VPLTreeNodes>> VPLTree;
-    std::vector<VPLTreeNodes> samplePoints;
 };
 
 class VPLGradient : public Integrator {
@@ -700,7 +731,6 @@ class VPLGradient : public Integrator {
 
         VPLList = {};
         VPLTree = {};
-        samplePoints = {};
     }
 
     static std::unique_ptr<VPLGradient> Create(
@@ -727,21 +757,41 @@ class VPLGradient : public Integrator {
                         Sampler sampler, ScratchBuffer &scratchBuffer,
                         std::vector<VPLTreeNodes> &samplePoints);
 
+    void GenerateCuts(int cutSize, const SurfaceInteraction &intr,
+                      std::vector<CutNodes> &cutNodes);
+
+    void SampleCuts(int cutSize, const SurfaceInteraction &intr, const BSDF *bsdf,
+                    Sampler sampler, ScratchBuffer &scratchBuffer,
+                    std::vector<CutNodes> &cutNodes);
+
+    void SampleShiftedCuts(int cutSize, const SurfaceInteraction &intr, const BSDF *bsdf,
+                           Sampler sampler, ScratchBuffer &scratchBuffer,
+                           std::vector<CutNodes> &cutNodes);
+
     void PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths &lambda, Sampler sampler,
                             ScratchBuffer &scratchBuffer, VisibleSurface *,
-                            Float randomStorage[]);
+                            std::vector<CutNodes> &cutNodes);
     void ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &lambda, Sampler sampler,
                            ScratchBuffer &scratchBuffer, VisibleSurface *,
-                           Float randomStorage[], const PrimalRay &pRay);
+                           std::vector<CutNodes> &cutNodes, const PrimalRay &pRay);
 
     SampledSpectrum SampleVPLLd(const SurfaceInteraction &intr, const BSDF *bsdf,
                                 SampledWavelengths &lambda, Sampler sampler,
-                                ScratchBuffer &scratchBuffer);
+                                ScratchBuffer &scratchBuffer,
+                                std::vector<CutNodes> &cutNodes);
+
+    SampledSpectrum SampleVPLLdShifted(const SurfaceInteraction &intr, const BSDF *bsdf,
+                                       SampledWavelengths &lambda, Sampler sampler,
+                                       ScratchBuffer &scratchBuffer,
+                                       std::vector<CutNodes> &cutNodes);
 
     Float MinimumDistance(Point3f sample, Point3f BBMin, Point3f BBMax);
 
     Float MaximumCosine(Point3f shadingPoint, Normal3f shadingNormal, Point3f BBMin,
                         Point3f BBMax);
+
+    Float NodeError(Point3f shadingPoint, Normal3f shadingNormal, Point3f BBMin,
+                    Point3f BBMax);
 
   private:
     Camera camera;
@@ -751,7 +801,6 @@ class VPLGradient : public Integrator {
     std::vector<std::vector<SampledSpectrum>> Primal, xGrad, yGrad, Temp;
     std::vector<VPL> VPLList;
     std::vector<std::vector<VPLTreeNodes>> VPLTree;
-    std::vector<VPLTreeNodes> samplePoints;
 };
 
 // FunctionIntegrator Definition
