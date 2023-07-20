@@ -2466,30 +2466,29 @@ void VPLGradient::GradEvaluatePixelSample(Point2i pPixel, int sampleIndex,
 
     // This will keep increasing indefinitely for more number of samples and the technique
     // will fail here
-    SampledSpectrum s(0.f);
-    for (int i = 0; i < 1; i++) {
-        s += pRay.pathL[i];
-        xGrad[pPixel.x][pPixel.y] += sRay[2].weight[i] *
-                                     (pRay.pathL[i] - sRay[2].pathL[i]) /
-                                     sampler.SamplesPerPixel();
-        yGrad[pPixel.x][pPixel.y] += sRay[3].weight[i] *
-                                     (pRay.pathL[i] - sRay[3].pathL[i]) /
-                                     sampler.SamplesPerPixel();
-        xGrad[pPixel.x + 1][pPixel.y] += sRay[0].weight[i] *
-                                         (sRay[0].pathL[i] - pRay.pathL[i]) /
-                                         sampler.SamplesPerPixel();
-        yGrad[pPixel.x][pPixel.y + 1] += sRay[1].weight[0] *
-                                         (sRay[1].pathL[i] - pRay.pathL[i]) /
-                                         sampler.SamplesPerPixel();
-    }
+    SampledSpectrum s(pRay.pathL[0]);
+    //for (int i = 0; i < 1; i++) {
+    //    s += pRay.pathL[i];
+    //    xGrad[pPixel.x][pPixel.y] += sRay[2].weight[i] *
+    //                                 (pRay.pathL[i] - sRay[2].pathL[i]) /
+    //                                 sampler.SamplesPerPixel();
+    //    yGrad[pPixel.x][pPixel.y] += sRay[3].weight[i] *
+    //                                 (pRay.pathL[i] - sRay[3].pathL[i]) /
+    //                                 sampler.SamplesPerPixel();
+    //    xGrad[pPixel.x + 1][pPixel.y] += sRay[0].weight[i] *
+    //                                     (sRay[0].pathL[i] - pRay.pathL[i]) /
+    //                                     sampler.SamplesPerPixel();
+    //    yGrad[pPixel.x][pPixel.y + 1] += sRay[1].weight[0] *
+    //                                     (sRay[1].pathL[i] - pRay.pathL[i]) /
+    //                                     sampler.SamplesPerPixel();
+    //}
 
     Primal[pPixel.x][pPixel.y] += s / sampler.SamplesPerPixel();
 
-    // xGrad[pPixel.x][pPixel.y]       += weights[2] * (s - sRay[2].L) /
-    // sampler.SamplesPerPixel(); yGrad[pPixel.x][pPixel.y]       += weights[3] * (s -
-    // sRay[3].L) / sampler.SamplesPerPixel(); xGrad[pPixel.x + 1][pPixel.y]   +=
-    // weights[0] * (sRay[0].L - s) / sampler.SamplesPerPixel(); yGrad[pPixel.x][pPixel.y
-    // + 1]   += weights[1] * (sRay[1].L - s) / sampler.SamplesPerPixel();
+    xGrad[pPixel.x][pPixel.y] += 0.5f * (s - sRay[2].pathL[0]) / sampler.SamplesPerPixel();
+    yGrad[pPixel.x][pPixel.y] += 0.5f * (s - sRay[3].pathL[0]) / sampler.SamplesPerPixel();
+    xGrad[pPixel.x + 1][pPixel.y] += 0.5f * (sRay[0].pathL[0] - s) / sampler.SamplesPerPixel();
+    yGrad[pPixel.x][pPixel.y + 1] += 0.5f * (sRay[1].pathL[0] - s) / sampler.SamplesPerPixel();
 
     // Add camera ray's contribution to image
     // Check AddSample code for weird stuff like weighing the sample
@@ -2603,7 +2602,7 @@ SampledSpectrum VPLGradient::SampleVPLLdShifted(const SurfaceInteraction& intr,
     // Choose a light source for the direct lighting calculation
     SampledSpectrum sampledLd(0.f);
     int cutSize = 10;
-    SampleShiftedCuts(cutSize, intr, bsdf, sampler, scratchBuffer, cutNodes);
+    //SampleShiftedCuts(cutSize, intr, bsdf, sampler, scratchBuffer, cutNodes);
     for (int i = 0; i < cutNodes.size(); i++) {
         VPL sampleVPL = *cutNodes[i].vpl;
         BSDF vplBSDF = sampleVPL.isect.GetBSDF(sampleVPL.ray, sampleVPL.lambda, camera,
