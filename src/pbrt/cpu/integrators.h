@@ -140,6 +140,9 @@ struct CutNodes {
     VPL *vpl;
     Float error = 0.f;
     Float prob = 1.f;
+    Float probP = 1.f;
+    Float jacobianP = 1.f;
+    Float jacobianS = 1.f;
 };
 
 // Integrator Definition
@@ -775,15 +778,15 @@ class VPLGradient : public Integrator {
                            ScratchBuffer &scratchBuffer, VisibleSurface *,
                            std::vector<CutNodes> &cutNodes, const PrimalRay &pRay);
 
-    SampledSpectrum SampleVPLLd(const SurfaceInteraction &intr, const BSDF *bsdf,
+    void SampleVPLLd(const SurfaceInteraction &intr, const BSDF *bsdf,
                                 SampledWavelengths &lambda, Sampler sampler,
                                 ScratchBuffer &scratchBuffer,
-                                std::vector<CutNodes> &cutNodes);
+                                std::vector<CutNodes> &cutNodes, PrimalRay &pRay);
 
-    SampledSpectrum SampleVPLLdShifted(const SurfaceInteraction &intr, const BSDF *bsdf,
+    void SampleVPLLdShifted(const SurfaceInteraction &intr, const BSDF *bsdf,
                                        SampledWavelengths &lambda, Sampler sampler,
                                        ScratchBuffer &scratchBuffer,
-                                       std::vector<CutNodes> &cutNodes);
+                                       std::vector<CutNodes> &cutNodes, ShiftRay &sRay);
 
     Float MinimumDistance(Point3f sample, Point3f BBMin, Point3f BBMax);
 

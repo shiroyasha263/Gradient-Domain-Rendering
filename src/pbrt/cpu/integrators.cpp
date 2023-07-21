@@ -2390,17 +2390,25 @@ void VPLGradient::GradEvaluatePixelSample(Point2i pPixel, int sampleIndex,
     // Trace _cameraRay_ if valid
     VisibleSurface visibleSurface;
     SampledSpectrum L(0.f);
+    int cutSize = 10;
 
     // Create the 5 necessary rays
     PrimalRay pRay(cameraRay->ray);
-    pRay.pathL = std::vector<SampledSpectrum>(1, SampledSpectrum(0.0f));
+    pRay.pathL = std::vector<SampledSpectrum>(cutSize, SampledSpectrum(0.f));
+    SampledSpectrum pS(0.f);
 
     ShiftRay sRay[4] = {ShiftRay(dx0CameraRay->ray), ShiftRay(dy0CameraRay->ray),
                         ShiftRay(dx1CameraRay->ray), ShiftRay(dy1CameraRay->ray)};
     for (int i = 0; i < 4; i++) {
-        sRay[i].pathL = std::vector<SampledSpectrum>(1, SampledSpectrum(0.0f));
+        sRay[i].pathL = std::vector<SampledSpectrum>(cutSize, SampledSpectrum(0.f));
         sRay[i].weight = std::vector<Float>(1, 0.5f);
     }
+    SampledSpectrum sS[4] = {
+        SampledSpectrum(0.f),
+        SampledSpectrum(0.f),
+        SampledSpectrum(0.f),
+        SampledSpectrum(0.f)
+    };
 
     if (cameraRay) {
         // Double check that the ray's direction is normalized.
@@ -2427,11 +2435,19 @@ void VPLGradient::GradEvaluatePixelSample(Point2i pPixel, int sampleIndex,
         PrimalRayPropogate(pRay, lambda, sampler, scratchBuffer,
                            initializeVisibleSurface ? &visibleSurface : nullptr,
                            cutNodes);
+        for (int i = 0; i < cutNodes.size(); i++) {
+            pS += pRay.pathL[i] / cutNodes[i].prob;
+        }
 
         for (int i = 0; i < 4; i++) {
             ShiftRayPropogate(sRay[i], lambda, sampler, scratchBuffer,
                               initializeVisibleSurface ? &visibleSurface : nullptr,
                               cutNodes, pRay);
+            for (int j = 0; j < cutNodes.size(); j++) {
+                sS[i] += (1 / (cutNodes[j].prob +
+                               cutNodes[j].probP * cutNodes[j].jacobianP * cutNodes[j].jacobianS)) *
+                         (sRay[i].pathL[j] - pRay.pathL[j]);
+            }
         }
 
         //--------------------------------------Shift -
@@ -2466,7 +2482,6 @@ void VPLGradient::GradEvaluatePixelSample(Point2i pPixel, int sampleIndex,
 
     // This will keep increasing indefinitely for more number of samples and the technique
     // will fail here
-    SampledSpectrum s(pRay.pathL[0]);
     //for (int i = 0; i < 1; i++) {
     //    s += pRay.pathL[i];
     //    xGrad[pPixel.x][pPixel.y] += sRay[2].weight[i] *
@@ -2483,17 +2498,16 @@ void VPLGradient::GradEvaluatePixelSample(Point2i pPixel, int sampleIndex,
     //                                     sampler.SamplesPerPixel();
     //}
 
-    Primal[pPixel.x][pPixel.y] += s / sampler.SamplesPerPixel();
-
-    xGrad[pPixel.x][pPixel.y] += 0.5f * (s - sRay[2].pathL[0]) / sampler.SamplesPerPixel();
-    yGrad[pPixel.x][pPixel.y] += 0.5f * (s - sRay[3].pathL[0]) / sampler.SamplesPerPixel();
-    xGrad[pPixel.x + 1][pPixel.y] += 0.5f * (sRay[0].pathL[0] - s) / sampler.SamplesPerPixel();
-    yGrad[pPixel.x][pPixel.y + 1] += 0.5f * (sRay[1].pathL[0] - s) / sampler.SamplesPerPixel();
+    Primal[pPixel.x][pPixel.y] += pS / sampler.SamplesPerPixel();
+    xGrad[pPixel.x][pPixel.y] -= sS[2] / sampler.SamplesPerPixel();
+    yGrad[pPixel.x][pPixel.y] -= sS[3] / sampler.SamplesPerPixel();
+    xGrad[pPixel.x + 1][pPixel.y] += sS[0] / sampler.SamplesPerPixel();
+    yGrad[pPixel.x][pPixel.y + 1] += sS[1] / sampler.SamplesPerPixel();
 
     // Add camera ray's contribution to image
     // Check AddSample code for weird stuff like weighing the sample
     camera.GetFilm().ResetPixel(pPixel);
-    camera.GetFilm().AddSample(pPixel, yGrad[pPixel.x][pPixel.y], lambda, &visibleSurface,
+    camera.GetFilm().AddSample(pPixel, xGrad[pPixel.x][pPixel.y], lambda, &visibleSurface,
                                cameraSample.filterWeight);
 }
 
@@ -2562,10 +2576,10 @@ void VPLGradient::PixelSampleVPLGenerator(int maxVPL, Sampler sampler,
     }
 }
 
-SampledSpectrum VPLGradient::SampleVPLLd(const SurfaceInteraction &intr,
+void VPLGradient::SampleVPLLd(const SurfaceInteraction &intr,
                                            const BSDF *bsdf, SampledWavelengths &lambda,
                                            Sampler sampler,
-                                           ScratchBuffer &scratchBuffer, std::vector<CutNodes> &cutNodes) {
+                                           ScratchBuffer &scratchBuffer, std::vector<CutNodes> &cutNodes, PrimalRay &pRay) {
     // Choose a light source for the direct lighting calculation
     SampledSpectrum sampledLd(0.f);
     int cutSize = 10;
@@ -2585,24 +2599,31 @@ SampledSpectrum VPLGradient::SampleVPLLd(const SurfaceInteraction &intr,
         SampledSpectrum f = bsdf->f(wo, wi) * AbsDot(wi, intr.shading.n);
         SampledSpectrum fL =
             vplBSDF.f(-sampleVPL.isect.wo, wi) * AbsDot(wi, sampleVPL.isect.shading.n);
+        
+        //
+        //Check the case where this is ocluded and shifted isnt..
+        // 
+        
         if (!f || !Unoccluded(intr, sampleVPL.isect) || cutNodes[i].prob == 0.f)
             continue;
         else {
-            sampledLd +=
-                sampleVPL.I * f * fL / (distance * distance * cutNodes[i].prob);
+            sampledLd =
+                sampleVPL.I * f * fL / (distance * distance);
+            cutNodes[i].jacobianP =
+                (distance * distance) / AbsDot(wi, sampleVPL.isect.shading.n);
+            pRay.pathL[i] = sampledLd;
         }
     }
-    return sampledLd;
 }
 
-SampledSpectrum VPLGradient::SampleVPLLdShifted(const SurfaceInteraction& intr,
+void VPLGradient::SampleVPLLdShifted(const SurfaceInteraction& intr,
                                             const BSDF* bsdf, SampledWavelengths& lambda,
                                             Sampler sampler, ScratchBuffer& scratchBuffer,
-                                            std::vector<CutNodes>& cutNodes) {
+                                            std::vector<CutNodes>& cutNodes, ShiftRay &sRay) {
     // Choose a light source for the direct lighting calculation
     SampledSpectrum sampledLd(0.f);
     int cutSize = 10;
-    //SampleShiftedCuts(cutSize, intr, bsdf, sampler, scratchBuffer, cutNodes);
+    SampleShiftedCuts(cutSize, intr, bsdf, sampler, scratchBuffer, cutNodes);
     for (int i = 0; i < cutNodes.size(); i++) {
         VPL sampleVPL = *cutNodes[i].vpl;
         BSDF vplBSDF = sampleVPL.isect.GetBSDF(sampleVPL.ray, sampleVPL.lambda, camera,
@@ -2617,13 +2638,17 @@ SampledSpectrum VPLGradient::SampleVPLLdShifted(const SurfaceInteraction& intr,
         SampledSpectrum f = bsdf->f(wo, wi) * AbsDot(wi, intr.shading.n);
         SampledSpectrum fL =
             vplBSDF.f(-sampleVPL.isect.wo, wi) * AbsDot(wi, sampleVPL.isect.shading.n);
-        if (!f || !Unoccluded(intr, sampleVPL.isect) || cutNodes[i].prob == 0.f)
+        if (!f || !Unoccluded(intr, sampleVPL.isect) || cutNodes[i].prob == 0.f) {
+            cutNodes[i].jacobianS = 1.f;
             continue;
+        }
         else {
-            sampledLd += sampleVPL.I * f * fL / (distance * distance * cutNodes[i].prob);
+            sampledLd = sampleVPL.I * f * fL / (distance * distance);
+            cutNodes[i].jacobianS =
+                AbsDot(wi, sampleVPL.isect.shading.n) / (distance * distance);
+            sRay.pathL[i] = sampledLd;
         }
     }
-    return sampledLd;
 }
 
 
@@ -2790,30 +2815,30 @@ VPLTreeNodes VPLGradient::SampleTree(VPLTreeNodes *vplNode,
         w1 *= cosRight;
         w2 *= cosLeft;
 
-        Float dminLeft, dminRight;
-        dminLeft =
-            MinimumDistance(intr.p(), vplNode->left->boundMin, vplNode->left->boundMax);
-        dminRight =
-            MinimumDistance(intr.p(), vplNode->right->boundMin, vplNode->right->boundMax);
-        Float diagLeft = Distance(vplNode->left->boundMin, vplNode->left->boundMax);
-        Float diagRight = Distance(vplNode->right->boundMin, vplNode->right->boundMax);
-        Float alpha = 1.f;
+        //Float dminLeft, dminRight;
+        //dminLeft =
+        //    MinimumDistance(intr.p(), vplNode->left->boundMin, vplNode->left->boundMax);
+        //dminRight =
+        //    MinimumDistance(intr.p(), vplNode->right->boundMin, vplNode->right->boundMax);
+        //Float diagLeft = Distance(vplNode->left->boundMin, vplNode->left->boundMax);
+        //Float diagRight = Distance(vplNode->right->boundMin, vplNode->right->boundMax);
+        //Float alpha = 1.f;
 
-        if (dminLeft == 0.f || dminRight == 0.f) {
-            dminLeft = 1.f;
-            dminRight = 1.f;
-        }
-
-        dminLeft = dminLeft > alpha * diagLeft ? dminLeft : 1.f;
-        dminRight = dminRight > alpha * diagRight ? dminRight : 1.f;
-
-        if (dminRight == 1.f || dminLeft == 1.f) {
-            dminLeft = 1.f;
-            dminRight = 1.f;
-        }
-
-        w1 = w1 / (dminRight * dminRight);
-        w2 = w2 / (dminLeft * dminLeft);
+        //if (dminLeft == 0.f || dminRight == 0.f) {
+        //    dminLeft = 1.f;
+        //    dminRight = 1.f;
+        //}
+        //
+        //dminLeft = dminLeft > alpha * diagLeft ? dminLeft : 1.f;
+        //dminRight = dminRight > alpha * diagRight ? dminRight : 1.f;
+        //
+        //if (dminRight == 1.f || dminLeft == 1.f) {
+        //    dminLeft = 1.f;
+        //    dminRight = 1.f;
+        //}
+        //
+        //w1 = w1 / (dminRight * dminRight);
+        //w2 = w2 / (dminLeft * dminLeft);
 
         if (w1 + w2) {
             float p = w1 / (w1 + w2);
@@ -2992,7 +3017,7 @@ void VPLGradient::SampleShiftedCuts(int cutSize, const SurfaceInteraction& intr,
     for (int i = 0; i < cutNodes.size(); i++) {
         VPLTreeNodes temp = *cutNodes[i].TreeNode;
         Float prob = 1.f;
-        while (temp.left == NULL && temp.right == NULL) {
+        while (temp.left != NULL || temp.right != NULL) {
             if (temp.left == NULL && temp.right == NULL) {
                 break;
             } else if (temp.left == NULL || temp.right == NULL) {
@@ -3013,35 +3038,35 @@ void VPLGradient::SampleShiftedCuts(int cutSize, const SurfaceInteraction& intr,
                 w1 *= cosRight;
                 w2 *= cosLeft;
 
-                Float dminLeft, dminRight;
-                dminLeft = MinimumDistance(intr.p(), temp.left->boundMin,
-                                           temp.left->boundMax);
-                dminRight = MinimumDistance(intr.p(), temp.right->boundMin,
-                                            temp.right->boundMax);
-                Float diagLeft =
-                    Distance(temp.left->boundMin, temp.left->boundMax);
-                Float diagRight =
-                    Distance(temp.right->boundMin, temp.right->boundMax);
-                Float alpha = 1.f;
-
-                if (dminLeft == 0.f || dminRight == 0.f) {
-                    dminLeft = 1.f;
-                    dminRight = 1.f;
-                }
-
-                dminLeft = dminLeft > alpha * diagLeft ? dminLeft : 1.f;
-                dminRight = dminRight > alpha * diagRight ? dminRight : 1.f;
-
-                if (dminRight == 1.f || dminLeft == 1.f) {
-                    dminLeft = 1.f;
-                    dminRight = 1.f;
-                }
-
-                w1 = w1 / (dminRight * dminRight);
-                w2 = w2 / (dminLeft * dminLeft);
-
+                //Float dminLeft, dminRight;
+                //dminLeft = MinimumDistance(intr.p(), temp.left->boundMin,
+                //                           temp.left->boundMax);
+                //dminRight = MinimumDistance(intr.p(), temp.right->boundMin,
+                //                            temp.right->boundMax);
+                //Float diagLeft =
+                //    Distance(temp.left->boundMin, temp.left->boundMax);
+                //Float diagRight =
+                //    Distance(temp.right->boundMin, temp.right->boundMax);
+                //Float alpha = 1.f;
+                //
+                //if (dminLeft == 0.f || dminRight == 0.f) {
+                //    dminLeft = 1.f;
+                //    dminRight = 1.f;
+                //}
+                //
+                //dminLeft = dminLeft > alpha * diagLeft ? dminLeft : 1.f;
+                //dminRight = dminRight > alpha * diagRight ? dminRight : 1.f;
+                //
+                //if (dminRight == 1.f || dminLeft == 1.f) {
+                //    dminLeft = 1.f;
+                //    dminRight = 1.f;
+                //}
+                //
+                //w1 = w1 / (dminRight * dminRight);
+                //w2 = w2 / (dminLeft * dminLeft);
                 if (w1 + w2) {
                     float p = w1 / (w1 + w2);
+                    
                     if (temp.sampledLeft) {
                         prob = prob * (1 - p);
                         temp = *temp.left;
@@ -3057,7 +3082,7 @@ void VPLGradient::SampleShiftedCuts(int cutSize, const SurfaceInteraction& intr,
                     break;
             }
         }
-        cutNodes[i].prob = prob;
+        cutNodes[i].probP = prob;
     }
 }
 
@@ -3110,8 +3135,7 @@ void VPLGradient::PrimalRayPropogate(PrimalRay &pRay, SampledWavelengths &lambda
         }
 
         // Sample direct illumination if _sampleLights_ is true
-        pRay.pathL[0] +=
-            pRay.beta * SampleVPLLd(isect, &bsdf, lambda, sampler, scratchBuffer, cutNodes);
+        SampleVPLLd(isect, &bsdf, lambda, sampler, scratchBuffer, cutNodes, pRay);
         break;
     }
     return;
@@ -3165,8 +3189,7 @@ void VPLGradient::ShiftRayPropogate(ShiftRay &sRay, SampledWavelengths &lambda,
         }
 
         // Sample direct illumination if _sampleLights_ is true
-        sRay.pathL[0] +=
-            sRay.beta * SampleVPLLdShifted(isect, &bsdf, lambda, sampler, scratchBuffer, cutNodes);
+        SampleVPLLdShifted(isect, &bsdf, lambda, sampler, scratchBuffer, cutNodes, sRay);
         break;
     }
     return;
