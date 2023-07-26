@@ -1866,15 +1866,12 @@ void VPLIntegrator::VPLTreeGenerator() {
                 node.boundMax.z = std::max(node.left->boundMax.z, node.right->boundMax.z);
                 node.depth = node.left->depth + 1;
                 VPLTree[k + 1].push_back(node);
-                VPLTree[k][i].parent = &VPLTree[k + 1][i / 2];
-                VPLTree[k][i + 1].parent = &VPLTree[k + 1][i / 2];
             } else {
                 VPLTreeNodes node(NULL, &VPLTree[k][i], NULL, VPLTree[k][i].I);
                 node.boundMin = node.left->boundMin;
                 node.boundMax = node.left->boundMax;
                 node.depth = node.left->depth + 1;
                 VPLTree[k + 1].push_back(node);
-                VPLTree[k][i].parent = &VPLTree[k + 1][i / 2];
             }
         }
         k = VPLTree.size() - 1;
@@ -1993,15 +1990,10 @@ VPLTreeNodes VPLIntegrator::SampleTree(VPLTreeNodes *vplNode,
         if (dminLeft == 0.f || dminRight == 0.f) {
             if (dminLeft == 0.f) {
                 dminLeft = 1.f;
-                vplNode->left->error = std::numeric_limits<Float>::max();
             }
             if (dminRight == 0.f) {
                 dminRight = 1.f;
-                vplNode->right->error = std::numeric_limits<Float>::max();
             }
-        } else {
-            vplNode->left->error += w2 / (dminLeft * dminLeft);
-            vplNode->right->error += w1 / (dminRight * dminRight);
         }
 
 
@@ -2224,14 +2216,40 @@ void VPLGradient::Render() {
 
 
     //VPL Generation
-    {
+    //{
+    //    ScratchBuffer &scratchBuffer = scratchBuffers.Get();
+    //    Sampler &sampler = samplers.Get();
+    //    int maxVPL = 100000;
+    //    for (int i = 0; i < maxVPL; i++) {
+    //        PixelSampleVPLGenerator(maxVPL, sampler, scratchBuffer, VPLList);
+    //    }
+    //}
+
+    int64_t maxVPL = 2000000;
+    int numThreads = 0;
+    int size = 0;
+    int vplcount = 0;
+    ParallelFor(0, maxVPL, [&](int start, int end) { numThreads += 1;
+    });
+    size = maxVPL / numThreads;
+    std::vector<std::vector<VPL>> threadVPLList(numThreads, std::vector<VPL>(0));
+    ParallelFor(0, maxVPL, [&](int start, int end) {
         ScratchBuffer &scratchBuffer = scratchBuffers.Get();
         Sampler &sampler = samplers.Get();
-        int maxVPL = 100000;
-        for (int i = 0; i < maxVPL; i++) {
-            PixelSampleVPLGenerator(maxVPL, sampler, scratchBuffer);
+        int threadId = start / size;
+        for (int i = 0; i < end - start; i++) {
+            PixelSampleVPLGenerator(maxVPL, sampler, scratchBuffer,
+                                    threadVPLList[threadId]);
+            scratchBuffer.Reset();
         }
+        vplcount += threadVPLList[threadId].size();
+    });
+    VPLList.reserve(vplcount);
+    for (int i = 0; i < numThreads; i++) {
+        for (int j = 0; j < threadVPLList[i].size(); j++)
+            VPLList.push_back(threadVPLList[i][j]);
     }
+    
 
     VPLTreeGenerator();
 
@@ -2444,8 +2462,8 @@ void VPLGradient::GradEvaluatePixelSample(Point2i pPixel, int sampleIndex,
                               initializeVisibleSurface ? &visibleSurface : nullptr,
                               cutNodes, pRay);
             for (int j = 0; j < cutNodes.size(); j++) {
-                sS[i] += (1 / (cutNodes[j].prob +
-                               cutNodes[j].probP * cutNodes[j].jacobianP * cutNodes[j].jacobianS)) *
+                sS[i] +=
+                    (1 / (cutNodes[j].prob * 2)) *
                          (sRay[i].pathL[j] - pRay.pathL[j]);
             }
         }
@@ -2511,8 +2529,7 @@ void VPLGradient::GradEvaluatePixelSample(Point2i pPixel, int sampleIndex,
                                cameraSample.filterWeight);
 }
 
-void VPLGradient::PixelSampleVPLGenerator(int maxVPL, Sampler sampler,
-                                            ScratchBuffer &scratchBuffer) {
+void VPLGradient::PixelSampleVPLGenerator(int maxVPL, Sampler sampler, ScratchBuffer &scratchBuffer, std::vector<VPL> &vplList) {
     // Sample wavelengths for the ray
     Float lu = sampler.Get1D();
     if (Options->disableWavelengthJitter)
@@ -2569,7 +2586,7 @@ void VPLGradient::PixelSampleVPLGenerator(int maxVPL, Sampler sampler,
             break;
         isSpecular = bs->IsSpecular();
         if (!isSpecular) {
-            VPLList.push_back(VPL(beta / maxVPL, isect, ray, lambda, isect.p()));
+            vplList.push_back(VPL(beta / maxVPL, isect, ray, lambda, isect.p()));
         }
         beta *= bs->f * AbsDot(bs->wi, isect.shading.n) / bs->pdf;
         ray = isect.SpawnRay(ray, bsdf, bs->wi, bs->flags, bs->eta);
@@ -2623,7 +2640,7 @@ void VPLGradient::SampleVPLLdShifted(const SurfaceInteraction& intr,
     // Choose a light source for the direct lighting calculation
     SampledSpectrum sampledLd(0.f);
     int cutSize = 10;
-    SampleShiftedCuts(cutSize, intr, bsdf, sampler, scratchBuffer, cutNodes);
+    //SampleShiftedCuts(cutSize, intr, bsdf, sampler, scratchBuffer, cutNodes);
     for (int i = 0; i < cutNodes.size(); i++) {
         VPL sampleVPL = *cutNodes[i].vpl;
         BSDF vplBSDF = sampleVPL.isect.GetBSDF(sampleVPL.ray, sampleVPL.lambda, camera,
@@ -2702,15 +2719,12 @@ void VPLGradient::VPLTreeGenerator() {
                 node.boundMax.z = std::max(node.left->boundMax.z, node.right->boundMax.z);
                 node.depth = node.left->depth + 1;
                 VPLTree[k + 1].push_back(node);
-                VPLTree[k][i].parent = &VPLTree[k + 1][i / 2];
-                VPLTree[k][i + 1].parent = &VPLTree[k + 1][i / 2];
             } else {
                 VPLTreeNodes node(NULL, &VPLTree[k][i], NULL, VPLTree[k][i].I);
                 node.boundMin = node.left->boundMin;
                 node.boundMax = node.left->boundMax;
                 node.depth = node.left->depth + 1;
                 VPLTree[k + 1].push_back(node);
-                VPLTree[k][i].parent = &VPLTree[k + 1][i / 2];
             }
         }
         k = VPLTree.size() - 1;
@@ -2815,30 +2829,30 @@ VPLTreeNodes VPLGradient::SampleTree(VPLTreeNodes *vplNode,
         w1 *= cosRight;
         w2 *= cosLeft;
 
-        //Float dminLeft, dminRight;
-        //dminLeft =
-        //    MinimumDistance(intr.p(), vplNode->left->boundMin, vplNode->left->boundMax);
-        //dminRight =
-        //    MinimumDistance(intr.p(), vplNode->right->boundMin, vplNode->right->boundMax);
-        //Float diagLeft = Distance(vplNode->left->boundMin, vplNode->left->boundMax);
-        //Float diagRight = Distance(vplNode->right->boundMin, vplNode->right->boundMax);
-        //Float alpha = 1.f;
+        Float dminLeft, dminRight;
+        dminLeft =
+            MinimumDistance(intr.p(), vplNode->left->boundMin, vplNode->left->boundMax);
+        dminRight =
+            MinimumDistance(intr.p(), vplNode->right->boundMin, vplNode->right->boundMax);
+        Float diagLeft = Distance(vplNode->left->boundMin, vplNode->left->boundMax);
+        Float diagRight = Distance(vplNode->right->boundMin, vplNode->right->boundMax);
+        Float alpha = 1.f;
 
-        //if (dminLeft == 0.f || dminRight == 0.f) {
-        //    dminLeft = 1.f;
-        //    dminRight = 1.f;
-        //}
-        //
-        //dminLeft = dminLeft > alpha * diagLeft ? dminLeft : 1.f;
-        //dminRight = dminRight > alpha * diagRight ? dminRight : 1.f;
-        //
-        //if (dminRight == 1.f || dminLeft == 1.f) {
-        //    dminLeft = 1.f;
-        //    dminRight = 1.f;
-        //}
-        //
-        //w1 = w1 / (dminRight * dminRight);
-        //w2 = w2 / (dminLeft * dminLeft);
+        if (dminLeft == 0.f || dminRight == 0.f) {
+            dminLeft = 1.f;
+            dminRight = 1.f;
+        }
+        
+        dminLeft = dminLeft > alpha * diagLeft ? dminLeft : 1.f;
+        dminRight = dminRight > alpha * diagRight ? dminRight : 1.f;
+        
+        if (dminRight == 1.f || dminLeft == 1.f) {
+            dminLeft = 1.f;
+            dminRight = 1.f;
+        }
+        
+        w1 = w1 / (dminRight * dminRight);
+        w2 = w2 / (dminLeft * dminLeft);
 
         if (w1 + w2) {
             float p = w1 / (w1 + w2);
@@ -2896,7 +2910,6 @@ void VPLGradient::SampleTreeCuts(int cutSize, const SurfaceInteraction &intr,
     VPLTreeNodes first = VPLTree[VPLTree.size() - 1][0];
     first.vpl = sample;
     first.prob = prob;
-    first.error = std::numeric_limits<Float>::max();
     samplePoints.push_back(first);
     while (samplePoints.size() < cutSize && samplePoints.size() < VPLList.size()) {
         int size = samplePoints.size();
@@ -3038,32 +3051,32 @@ void VPLGradient::SampleShiftedCuts(int cutSize, const SurfaceInteraction& intr,
                 w1 *= cosRight;
                 w2 *= cosLeft;
 
-                //Float dminLeft, dminRight;
-                //dminLeft = MinimumDistance(intr.p(), temp.left->boundMin,
-                //                           temp.left->boundMax);
-                //dminRight = MinimumDistance(intr.p(), temp.right->boundMin,
-                //                            temp.right->boundMax);
-                //Float diagLeft =
-                //    Distance(temp.left->boundMin, temp.left->boundMax);
-                //Float diagRight =
-                //    Distance(temp.right->boundMin, temp.right->boundMax);
-                //Float alpha = 1.f;
-                //
-                //if (dminLeft == 0.f || dminRight == 0.f) {
-                //    dminLeft = 1.f;
-                //    dminRight = 1.f;
-                //}
-                //
-                //dminLeft = dminLeft > alpha * diagLeft ? dminLeft : 1.f;
-                //dminRight = dminRight > alpha * diagRight ? dminRight : 1.f;
-                //
-                //if (dminRight == 1.f || dminLeft == 1.f) {
-                //    dminLeft = 1.f;
-                //    dminRight = 1.f;
-                //}
-                //
-                //w1 = w1 / (dminRight * dminRight);
-                //w2 = w2 / (dminLeft * dminLeft);
+                Float dminLeft, dminRight;
+                dminLeft = MinimumDistance(intr.p(), temp.left->boundMin,
+                                           temp.left->boundMax);
+                dminRight = MinimumDistance(intr.p(), temp.right->boundMin,
+                                            temp.right->boundMax);
+                Float diagLeft =
+                    Distance(temp.left->boundMin, temp.left->boundMax);
+                Float diagRight =
+                    Distance(temp.right->boundMin, temp.right->boundMax);
+                Float alpha = 1.f;
+                
+                if (dminLeft == 0.f || dminRight == 0.f) {
+                    dminLeft = 1.f;
+                    dminRight = 1.f;
+                }
+                
+                dminLeft = dminLeft > alpha * diagLeft ? dminLeft : 1.f;
+                dminRight = dminRight > alpha * diagRight ? dminRight : 1.f;
+                
+                if (dminRight == 1.f || dminLeft == 1.f) {
+                    dminLeft = 1.f;
+                    dminRight = 1.f;
+                }
+                
+                w1 = w1 / (dminRight * dminRight);
+                w2 = w2 / (dminLeft * dminLeft);
                 if (w1 + w2) {
                     float p = w1 / (w1 + w2);
                     

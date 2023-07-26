@@ -84,6 +84,13 @@ struct ShiftRay {
 };
 
 struct VPL {
+    VPL() { 
+        I = SampledSpectrum(0.f);
+        isect = {};
+        ray = {};
+        lambda = SampledWavelengths();
+        point = Point3f(0.f, 0.f, 0.f);
+    }
     VPL(SampledSpectrum I, SurfaceInteraction isect, RayDifferential ray, SampledWavelengths lambda, Point3f point)
         : I(I), isect(isect), ray(ray), lambda(lambda), point(point) {}
     SampledSpectrum I;
@@ -98,15 +105,13 @@ struct VPLTreeNodes {
         vpl = NULL;
         left = NULL;
         right = NULL;
-        parent = NULL;
         I = SampledSpectrum(0.f);
         prob = 1.f;
-        error = 0.f;
         boundMax = Point3f(0.f, 0.f, 0.f);
         boundMin = Point3f(0.f, 0.f, 0.f);
     }
     VPLTreeNodes(VPL *vpl, VPLTreeNodes *left, VPLTreeNodes *right, SampledSpectrum I, VPLTreeNodes *parent = NULL)
-    :vpl(vpl), left(left), right(right), I(I), parent(parent){
+    :vpl(vpl), left(left), right(right), I(I){
         prob = 0.f;
         if (vpl != NULL) {
             boundMin = vpl->point;
@@ -115,7 +120,6 @@ struct VPLTreeNodes {
             boundMax = Point3f(0.f, 0.f, 0.f);
             boundMin = Point3f(0.f, 0.f, 0.f);
         }
-        error = 0.f;
     }
     VPL *vpl;
     VPLTreeNodes *left;
@@ -125,8 +129,6 @@ struct VPLTreeNodes {
     bool sampledLeft = true;
     unsigned int depth = 0;
     float prob = 1.f;
-    Float error;
-    VPLTreeNodes *parent;
 };
 
 struct CutNodes {
@@ -748,7 +750,7 @@ class VPLGradient : public Integrator {
                                  ScratchBuffer &scratchBuffer);
 
     void PixelSampleVPLGenerator(int maxVPL, Sampler sampler,
-                                 ScratchBuffer &scratchBuffer);
+                                 ScratchBuffer &scratchBuffer, std::vector<VPL> &vplList);
 
     void VPLTreeGenerator();
 
