@@ -1468,13 +1468,30 @@ void VPLIntegrator::Render() {
         
     });*/
 
-    {
+    int64_t maxVPL = 840000;
+    int numThreads = 0;
+    int size = 0;
+    int vplcount = 0;
+    ParallelFor(0, maxVPL, [&](int start, int end) { numThreads += 1; });
+    size = maxVPL / numThreads;
+    std::vector<std::vector<VPL>> threadVPLList(numThreads, std::vector<VPL>(0));
+    ParallelFor(0, maxVPL, [&](int start, int end) {
         ScratchBuffer &scratchBuffer = scratchBuffers.Get();
         Sampler &sampler = samplers.Get();
-        int maxVPL = 100000;
-        for (int i = 0; i < maxVPL; i++) {
-            PixelSampleVPLGenerator(maxVPL, sampler, scratchBuffer);
+        int threadId = start / size;
+        for (int i = 0; i < end - start; i++) {
+            PixelSampleVPLGenerator(maxVPL, sampler, scratchBuffer,
+                                    threadVPLList[threadId]);
+            scratchBuffer.Reset();
         }
+    });
+    for (int i = 0; i < numThreads; i++) {
+        vplcount += threadVPLList[i].size();
+    }
+    VPLList.reserve(vplcount);
+    for (int i = 0; i < numThreads; i++) {
+        for (int j = 0; j < threadVPLList[i].size(); j++)
+            VPLList.push_back(threadVPLList[i][j]);
     }
 
     VPLTreeGenerator();
@@ -1613,7 +1630,7 @@ void VPLIntegrator::EvaluatePixelSample(Point2i pPixel, int sampleIndex,
 }
 
 void VPLIntegrator::PixelSampleVPLGenerator(int maxVPL, Sampler sampler,
-                                             ScratchBuffer& scratchBuffer) {
+                                             ScratchBuffer& scratchBuffer, std::vector<VPL> &vplList) {
     
     // Sample wavelengths for the ray
     Float lu = sampler.Get1D();
@@ -1671,7 +1688,7 @@ void VPLIntegrator::PixelSampleVPLGenerator(int maxVPL, Sampler sampler,
             break;
         isSpecular = bs->IsSpecular();
         if (!isSpecular) {
-            VPLList.push_back(VPL(beta / maxVPL, isect, ray, lambda, isect.p()));
+            vplList.push_back(VPL(beta / maxVPL, isect, ray, lambda, isect.p()));
         }
         beta *= bs->f * AbsDot(bs->wi, isect.shading.n) / bs->pdf;
         ray = isect.SpawnRay(ray, bsdf, bs->wi, bs->flags, bs->eta);
@@ -1788,6 +1805,7 @@ SampledSpectrum VPLIntegrator::SampleVPLLd(const SurfaceInteraction &intr, const
     //VPLTreeNodes sampleleaf = SampleTree(&VPLTree[VPLTree.size() - 1][0], intr, bsdf, sampler, scratchBuffer, prob);
     std::vector<CutNodes> cutNodes = {};
     int cutSize = 10;
+    GenerateCuts(cutSize, intr, cutNodes);
     SampleCuts(cutSize, intr, bsdf, sampler, scratchBuffer, cutNodes);
     for (int i = 0; i < cutNodes.size(); i++) {
         VPL sampleVPL = *cutNodes[i].vpl;
@@ -2225,7 +2243,7 @@ void VPLGradient::Render() {
     //    }
     //}
 
-    int64_t maxVPL = 2000000;
+    int64_t maxVPL = 840000;
     int numThreads = 0;
     int size = 0;
     int vplcount = 0;
@@ -2242,14 +2260,17 @@ void VPLGradient::Render() {
                                     threadVPLList[threadId]);
             scratchBuffer.Reset();
         }
-        vplcount += threadVPLList[threadId].size();
     });
+    for (int i = 0; i < numThreads; i++) {
+        vplcount += threadVPLList[i].size();
+    }
+    printf("%d\n", vplcount);
     VPLList.reserve(vplcount);
     for (int i = 0; i < numThreads; i++) {
         for (int j = 0; j < threadVPLList[i].size(); j++)
             VPLList.push_back(threadVPLList[i][j]);
     }
-    
+    printf("%d\n", VPLList.size());
 
     VPLTreeGenerator();
 
@@ -3004,7 +3025,7 @@ void VPLGradient::GenerateCuts(int cutSize, const SurfaceInteraction &intr,
         if (cutNodes.size() >= cutSize || cutNodes.size() >= VPLList.size())
             break;
          std::sort(cutNodes.begin(), cutNodes.end(),
-                   [](CutNodes a, CutNodes b) { return a.TreeNode->depth > b.TreeNode->depth;
+                   [](CutNodes a, CutNodes b) { return a.error > b.error;
                    });
     }
 }

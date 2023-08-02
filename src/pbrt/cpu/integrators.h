@@ -668,7 +668,8 @@ class VPLIntegrator : public Integrator {
     void EvaluatePixelSample(Point2i pPixel, int sampleIndex, Sampler sampler,
                              ScratchBuffer &scratchBuffer);
 
-    void PixelSampleVPLGenerator(int maxVPL, Sampler sampler, ScratchBuffer &scratchBuffer);
+    void PixelSampleVPLGenerator(int maxVPL, Sampler sampler,
+                                 ScratchBuffer &scratchBuffer, std::vector<VPL> &vplList);
 
     void VPLTreeGenerator();
 
