@@ -7,7 +7,7 @@ Physically based gradient domain renderer with various other algorithms implemen
 Features
 --------
 1. Gradient Domain Rendering, with path reconnection
-   - ![Gradient Domain Rendering - 128 spp - Cornell Box](https://github.com/shiroyasha263/Gradient-Domain-Rendering/assets/63004181/4489fa90-9d70-489a-9317-8324af726d7e)
+   - ![Gradient Domain Rendering - 128 spp - Cornell Box](https://github.com/shiroyasha263/Gradient-Domain-Rendering/blob/GDR/Results/GDR-128-pic.png)
    - ![Gradient Domain Rendering - 128 spp - Teapot](https://github.com/shiroyasha263/Gradient-Domain-Rendering/assets/63004181/62a7d86d-b4dc-4757-850f-322a251f0a1c)
 
 2. Stochastic Lightcuts, with VPL generation for indirect lighting
