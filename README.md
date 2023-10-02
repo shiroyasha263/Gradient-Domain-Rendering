@@ -8,16 +8,15 @@ Features
 --------
 1. Gradient Domain Rendering, with path reconnection
    - ![Gradient Domain Rendering - 128 spp - Cornell Box](https://github.com/shiroyasha263/Gradient-Domain-Rendering/blob/GDR/Results/GDR-128-pic.png)
-   - ![Gradient Domain Rendering - 128 spp - Teapot](https://github.com/shiroyasha263/Gradient-Domain-Rendering/assets/63004181/62a7d86d-b4dc-4757-850f-322a251f0a1c)
+   - ![Gradient Domain Rendering - 128 spp - Teapot](https://github.com/shiroyasha263/Gradient-Domain-Rendering/blob/GDR/Results/Grad-Teapot-128-pic.png)
 
 2. Stochastic Lightcuts, with VPL generation for indirect lighting
-   - ![Stochastic Lightcuts - 128 spp - Cornell Box - 620s](https://github.com/shiroyasha263/Gradient-Domain-Rendering/assets/63004181/1af8cf79-c5e1-4578-aa14-30b5032f903b)
-   - ![Stochastic Lightcuts - 128 spp - Staircase - 1000s](https://github.com/shiroyasha263/Gradient-Domain-Rendering/assets/63004181/39e53d76-4daa-4ed3-ad5c-99aed39d8651)
+   - ![Stochastic Lightcuts - 128 spp - Cornell Box - 620s](https://github.com/shiroyasha263/Gradient-Domain-Rendering/blob/GDR/Results/Stochastic%20Lightcuts%20-%20128%20spp%20-%20Cornell%20Box%20-%20620s.png)
+   - ![Stochastic Lightcuts - 128 spp - Staircase - 1000s](https://github.com/shiroyasha263/Gradient-Domain-Rendering/blob/GDR/Results/Stochastic%20Lightcuts%20-%20128%20spp%20-%20Staircase%20-%201000s.png)
 
 3. Gradient Domain Rendering with Stochastic Lightcuts Shiftmapping
-   - ![GDRSLC - 64 spp - Cornell Box - 620s](https://github.com/shiroyasha263/Gradient-Domain-Rendering/assets/63004181/9abeb9e3-0cf4-4b97-a3f0-ba987909216c)
-   - ![GDRSLC - 64 spp - Staircase - 820s](https://github.com/shiroyasha263/Gradient-Domain-Rendering/assets/63004181/98bbd15c-e07a-4075-8e29-a2a56da099f9)
-
+   - ![GDRSLC - 64 spp - Cornell Box - 620s](https://github.com/shiroyasha263/Gradient-Domain-Rendering/blob/GDR/Results/GDRSLC%20-%2064%20spp%20-%20Cornell%20Box%20-%20620s.png)
+   - ![GDRSLC - 64 spp - Staircase - 820s](https://github.com/shiroyasha263/Gradient-Domain-Rendering/blob/GDR/Results/GDRSLC%20-%2064%20spp%20-%20Staircase%20-%20820s.png)
 
 
 Building the code
