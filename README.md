@@ -2,7 +2,7 @@ Gradient Domain Renderer
 ===============================
 
 Physically based gradient domain renderer with various other algorithms implemented alongside it. This is built over PBRT v-4
-
+![Report of my work](https://github.com/shiroyasha263/Gradient-Domain-Rendering/blob/GDR/Scalable_Gradient_Domain_Rendering_Report.pdf)
 
 Features
 --------
